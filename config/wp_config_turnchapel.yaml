@@ -1,0 +1,13 @@
+- config: turnchapel
+  uavs:
+    - hector
+  uav_waypoints:
+  # hold_time in second, rel_alt is height above ground 
+  # Please see Waypoint.msg in mavros_msgs package for other parameters
+  - {hold_time: 10.0, radius: 1.0, yaw: 0.0, lat: 50.35971650, long: -4.11857480, rel_alt: 15.0}
+  - {hold_time: 30.0, radius: 1.0, yaw: 0.0, lat: 50.36029140, long: -4.11854800, rel_alt: 15.0}
+  - {hold_time: 6.0, radius: 1.0, yaw: 0.0, lat: 50.36030170, long: -4.11809210, rel_alt: 15.0}
+  - {hold_time: 8.0, radius: 1.0, yaw: 0.0, lat: 50.35970280, long: -4.11853190, rel_alt: 15.0}
+  - {hold_time: 8.0, radius: 1.0, yaw: 0.0, lat: 50.35981230, long: -4.11817790, rel_alt: 5.0}
+  asvs: []
+  asv_waypoints: []
