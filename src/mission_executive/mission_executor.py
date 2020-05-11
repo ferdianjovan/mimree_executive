@@ -7,11 +7,10 @@ import roslib
 import rospy
 # 3rd Party Packages
 import yaml
-from diagnostic_msgs.msg import KeyValue
-from rosplan_dispatch_msgs.srv import DispatchService
-from rosplan_knowledge_msgs.srv import KnowledgeUpdateServiceRequest
 from std_srvs.srv import Empty
-from uav_executive.planner_interface import PlannerInterface
+from rosplan_dispatch_msgs.srv import DispatchService
+from uav_executive.planner_interface import PlannerInterface as PIUAV
+from asv_executive.planner_interface import PlannerInterface as PIASV
 
 
 class MissionExec(object):
@@ -20,14 +19,17 @@ class MissionExec(object):
         config = self.load_mission_config_file(filename, configname)
         # UAV planner
         if len(config['uavs']) and len(config['uav_waypoints']):
-            self.uav_exec = PlannerInterface(config['uavs'],
-                                             config['uav_waypoints'],
-                                             config['asv_waypoints'])
+            self.uav_exec = PIUAV(config['uavs'], config['uav_waypoints'],
+                                  config['asv_waypoints'])
         else:
             self.uav_exec = None
         # ASV planner
         if len(config['asvs']) and len(config['asv_waypoints']):
-            self.asv_exec = None
+            uavs = list()
+            if self.uav_exec is not None:
+                uavs = self.uav_exec.uavs
+            self.asv_exec = PIASV(config['asvs'], config['asv_waypoints'],
+                                  uavs, config['uav_carrier'])
         else:
             self.asv_exec = None
         # Service proxies
@@ -69,27 +71,39 @@ class MissionExec(object):
         """
         if self.uav_exec is not None:
             self.uav_exec.resume_plan()
-            rospy.Timer(self._rate.sleep_dur, self.execute, oneshot=True)
+        if self.asv_exec is not None:
+            self.asv_exec.resume_plan()
+        rospy.Timer(self._rate.sleep_dur, self.execute, oneshot=True)
         return list()
 
-    def inspection_mission(self):
+    def inspection_mission(self, full=False):
         """
         Inspection mission
         """
         if self.uav_exec is not None:
             self.uav_exec.inspection_mission()
-        if self.asv_exec is not None:
-            rospy.loginfo("Nothing to add...")
-        self.execute()
+            if self.asv_exec is not None and not full:
+                self.asv_exec.deploy_retrieve_mission()
+            elif self.asv_exec is not None and full:
+                self.asv_exec.inspection_mission()
+            self.execute()
+        if self.asv_exec is not None and self.uav_exec is None:
+            self.asv_exec.inspection_mission()
+            self.execute()
 
     def low_battery_replan(self, event=True):
         """
         Assets return home due to low battery voltage
         """
+        if self.uav_exec is not None and True in self.uav_exec.lowbat.values():
+            self.uav_exec.low_battery_return_mission(all_return=False)
+        if self.asv_exec is not None and True in self.asv_exec.lowfuel.values(
+        ):
+            if self.asv_exec.low_fuel[self.asv_exec.uav_carrier]:
+                self.uav_exec.low_battery_return_mission(all_return=True)
+            self.asv_exec.low_fuel_return_mission()
         if True in self.uav_exec.lowbat.values():
-            self.uav_exec.low_battery_return_mission()
             self.execute()
-        # TODO: add ASV return to launch due to low fuel percentage
 
     def execute(self, event=True):
         """

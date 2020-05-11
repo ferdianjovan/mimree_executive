@@ -10,4 +10,5 @@
   - {hold_time: 8.0, radius: 1.0, yaw: 0.0, lat: 50.35970280, long: -4.11853190, rel_alt: 15.0}
   - {hold_time: 8.0, radius: 1.0, yaw: 0.0, lat: 50.35981230, long: -4.11817790, rel_alt: 5.0}
   asvs: []
+  uav_carrier: '' 
   asv_waypoints: []

@@ -7,6 +7,7 @@ from threading import Lock
 import numpy as np
 # ROS Packages
 import rospy
+from asv_executive.executor import ActionExecutor
 from diagnostic_msgs.msg import KeyValue
 from rosplan_dispatch_msgs.msg import ActionDispatch, ActionFeedback
 from rosplan_knowledge_msgs.msg import KnowledgeItem
@@ -15,8 +16,6 @@ from rosplan_knowledge_msgs.srv import (GetAttributeService,
                                         GetDomainPredicateDetailsService,
                                         KnowledgeUpdateService,
                                         KnowledgeUpdateServiceRequest)
-from uav_executive.executor import ActionExecutor
-from uav_executive.preflightcheck import PreFlightCheck
 
 
 class PlannerInterface(object):
@@ -25,19 +24,21 @@ class PlannerInterface(object):
 
     def __init__(self,
                  names,
-                 uav_waypoints,
-                 asv_waypoints=list(),
+                 asv_waypoints,
+                 uavs=list(),
+                 uav_carrier='',
                  update_frequency=10.):
         """
-        A Class that interfaces with ROSPlan for dispatching uav actions and
-        updating uav knowledge during a mission
+        A Class that interfaces with ROSPlan for dispatching asv actions and
+        updating asv knowledge during a mission
         """
         self.goal_state = list()
-        self.waypoints = uav_waypoints
+        self.uavs = uavs
+        self.uav_carrier = uav_carrier
+        self.waypoints = asv_waypoints
         self._rate = rospy.Rate(update_frequency)
-        self.lowbat = {name: False for name in names}
-        self.takeoff_wps = self.get_takeoff_wps(asv_waypoints)
-        self.uavs = [ActionExecutor(name, self.waypoints) for name in names]
+        self.lowfuel = {name: False for name in names}
+        self.asvs = [ActionExecutor(name, self.waypoints) for name in names]
 
         # Rosplan Service proxies
         rospy.loginfo('Waiting for service /rosplan_knowledge_base/update ...')
@@ -75,31 +76,19 @@ class PlannerInterface(object):
         self.instances_set = self.set_instances()
         self.init_set = False
         if not self.instances_set:
-            rospy.logerr('UAV instances in PDDL can\'t be set!')
+            rospy.logerr('ASV instances in PDDL can\'t be set!')
         self.init_set = self.set_init()
         if not self.init_set:
-            rospy.logerr('UAV initial state can\'t be set!')
+            rospy.logerr('ASV initial state can\'t be set!')
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.fact_update)
         rospy.Timer(50 * self._rate.sleep_dur, self.function_update)
 
-    def get_takeoff_wps(self, waypoints):
+    def low_fuel_return_mission(self):
         """
-        Get ASV areas where UAV can takeoff
+        ASV return to launch due to low fuel voltage
         """
-        takeoff_wps = [
-            'asv_wp' + str(idx) for idx, val in enumerate(waypoints)
-            if val['takeoff']
-        ]
-        if takeoff_wps == []:
-            takeoff_wps = ['uav_wp0']
-        return takeoff_wps
-
-    def low_battery_return_mission(self, all_return=False):
-        """
-        UAV return to launch due to low battery voltage
-        """
-        if len(self.uavs) == 1 or all_return:
+        if len(self.asvs) == 1:
             self._rate.sleep()
             # Remove current goal
             update_types = [
@@ -112,10 +101,10 @@ class PlannerInterface(object):
             # Add new goal
             pred_names = ['landed', 'at']
             params = [
-                [KeyValue('v', self.uavs[0].namespace)],
+                [KeyValue('v', self.asvs[0].namespace)],
                 [
-                    KeyValue('v', self.uavs[0].namespace),
-                    KeyValue('wp', 'uav_wp0')
+                    KeyValue('v', self.asvs[0].namespace),
+                    KeyValue('wp', 'asv_wp0')
                 ],
             ]
             self.goal_state = (pred_names, params)
@@ -128,27 +117,38 @@ class PlannerInterface(object):
 
     def inspection_mission(self):
         """
-        UAV mission visiting all waypoints and coming back to launch pod
+        ASV mission visiting all waypoints and coming back to launch pod
         """
         # 'all waypoints must be visited' goals
         pred_names = ['visited' for _ in self.waypoints]
-        params = [[KeyValue('wp', 'uav_wp%d' % (idx + 1))]
+        params = [[KeyValue('wp', 'asv_wp%d' % (idx + 1))]
                   for idx, _ in enumerate(self.waypoints)]
         update_types = [
             KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.waypoints
         ]
-        # 'all drones must be back at home' goals
-        pred_names.extend(['at' for _ in self.uavs])
+        # 'all asvs must be back at home' goals
+        pred_names.extend(['at' for _ in self.asvs])
         params.extend(
-            [[KeyValue('v', uav.namespace),
-              KeyValue('wp', 'uav_wp0')] for uav in self.uavs])
+            [[KeyValue('v', asv.namespace),
+              KeyValue('wp', 'asv_wp0')] for asv in self.asvs])
         update_types.extend(
-            [KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.uavs])
-        # 'all drones must be landed' goals
-        pred_names.extend(['landed' for _ in self.uavs])
-        params.extend([[KeyValue('v', uav.namespace)] for uav in self.uavs])
-        update_types.extend(
-            [KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.uavs])
+            [KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.asvs])
+        self.goal_state = (pred_names, params)
+        succeed = self.update_predicates(pred_names, params, update_types)
+        self._rate.sleep()
+        return succeed
+
+    def deploy_retrieve_mission(self):
+        """
+        ASV mission visiting all waypoints and coming back to launch pod
+        """
+        # 'all asvs must be back at home' goals
+        pred_names = ['at' for _ in self.asvs]
+        params = [[KeyValue('v', asv.namespace),
+                   KeyValue('wp', 'asv_wp0')] for asv in self.asvs]
+        update_types = [
+            KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.asvs
+        ]
         self.goal_state = (pred_names, params)
         succeed = self.update_predicates(pred_names, params, update_types)
         self._rate.sleep()
@@ -156,27 +156,25 @@ class PlannerInterface(object):
 
     def fact_update(self, event):
         """
-        Add or remove facts related to UAVs at ROSPlan knowledge base
+        Add or remove facts related to ASVs at ROSPlan knowledge base
         """
         self._wp_update()
         self._arm_update()
-        self._guide_update()
-        self._landing_update()
 
     def function_update(self, event):
         """
-        Update functions related to UAVs at ROSPlan knowledge base
+        Update functions related to ASVs at ROSPlan knowledge base
         """
-        self._battery_update()
+        self._fuel_update()
 
     def resume_plan(self):
         """
         Function to flag down human intervention
         """
-        for uav in self.uavs:
-            uav.previous_mode = uav.current_mode
-            uav.current_mode = uav.state.mode
-            uav.external_intervened = False
+        for asv in self.asvs:
+            asv.previous_mode = asv.current_mode
+            asv.current_mode = asv.state.mode
+            asv.external_intervened = False
 
     def update_instances(self, ins_types, ins_names, update_types):
         """
@@ -236,18 +234,18 @@ class PlannerInterface(object):
 
     def set_instances(self):
         """
-        Set initial instances for UAVs to ROSPlan
+        Set initial instances for ASVs to ROSPlan
         """
         ins_types = list()
         ins_names = list()
         update_types = list()
         for idx in range(len(self.waypoints) + 1):
-            ins_types.append('uav_waypoint')
-            ins_names.append('uav_wp' + str(idx))
+            ins_types.append('asv_waypoint')
+            ins_names.append('asv_wp' + str(idx))
             update_types.append(KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
-        for uav in self.uavs:
-            ins_types.append('uav')
-            ins_names.append(uav.namespace)
+        for asv in self.asvs:
+            ins_types.append('asv')
+            ins_names.append(asv.namespace)
             update_types.append(KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
         return self.update_instances(ins_types, ins_names, update_types)
 
@@ -260,115 +258,53 @@ class PlannerInterface(object):
         connections.extend([(0, len(self.waypoints))])
         connections.extend([(j, i) for i, j in connections])
         # add wp connection from takeoff waypoint to home and last wp
-        connections.extend([(i, 'uav_wp0') for i in self.takeoff_wps
+        connections.extend([(i, 'asv_wp0') for i in self.takeoff_wps
                             if ('asv' in i)])
-        connections.extend([(i, 'uav_wp%d' + len(self.waypoints))
+        connections.extend([(i, 'asv_wp%d' + len(self.waypoints))
                             for i in self.takeoff_wps if ('asv' in i)])
         succeed = self.update_predicates(
             ['connected' for _ in connections], [[
-                KeyValue('wp1', 'uav_wp' + str(i[0])),
-                KeyValue('wp2', 'uav_wp' + str(i[1]))
+                KeyValue('wp1', 'asv_wp' + str(i[0])),
+                KeyValue('wp2', 'asv_wp' + str(i[1]))
             ] for i in connections],
             [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE for _ in connections])
         # add home wp position
         succeed = succeed and self.update_predicates(
-            ['home'], [[KeyValue('wp', 'uav_wp0')]],
+            ['home'], [[KeyValue('wp', 'asv_wp0')]],
             [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
-        # add wp where uav can takeoff
-        succeed = succeed and self.update_predicates(
-            ['takeoff' for _ in self.takeoff_wps],
-            [[KeyValue('wp', i)] for i in self.takeoff_wps], [
-                KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
-                for _ in self.takeoff_wps
-            ])
-        # add minimum-battery condition
+        # add carrier asv
+        if self.uav_carrier != '':
+            succeed = succeed and self.update_predicates(
+                ['carrier'], [[KeyValue('v', self.uav_carrier)]],
+                [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
+        # add minimum-fuel condition
         succeed = succeed and self.update_functions(
-            ['minimum-battery'
-             for _ in self.uavs], [[KeyValue('v', uav.namespace)]
-                                   for uav in self.uavs],
-            [ActionExecutor.MINIMUM_VOLTAGE for _ in self.uavs],
-            [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE for _ in self.uavs])
-        # add initial battery-amount condition
+            ['minimum-fuel'
+             for _ in self.asvs], [[KeyValue('v', asv.namespace)]
+                                   for asv in self.asvs],
+            [ActionExecutor.MINIMUM_FUEL for _ in self.asvs],
+            [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE for _ in self.asvs])
+        # add initial fuel-percentage condition
         succeed = succeed and self.update_functions(
-            ['battery-amount'
-             for _ in self.uavs], [[KeyValue('v', uav.namespace)]
-                                   for uav in self.uavs],
-            [ActionExecutor.INIT_VOLTAGE for _ in self.uavs],
-            [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE for _ in self.uavs])
+            ['fuel-percentage'
+             for _ in self.asvs], [[KeyValue('v', asv.namespace)]
+                                   for asv in self.asvs],
+            [ActionExecutor.INIT_FUEL for _ in self.asvs],
+            [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE for _ in self.asvs])
         return succeed
 
-    def goto_waypoint(self, uav, params, dur=rospy.Duration(60, 0)):
+    def goto_waypoint(self, asv, params, dur=rospy.Duration(60, 0)):
         """
-        Go to waypoint action for UAV
+        Go to waypoint action for ASV
         """
         waypoint = -1
         for param in params:
             if param.key == 'to':
                 waypoint = int(re.findall(r'\d+', param.value)[0])
                 break
-        response = uav.goto(
+        response = asv.goto(
             waypoint, dur) if waypoint != -1 else ActionExecutor.ACTION_FAIL
         return response
-
-    def preflightcheck(self, uav, duration=rospy.Duration(600, 0)):
-        """
-        Preflight check action for UAV
-        """
-        start = rospy.Time.now()
-        # preflight process
-        preflightcheck = PreFlightCheck(uav)
-        try:
-            init_batt = float(preflightcheck._init_batt.get())
-            min_batt = float(preflightcheck._low_batt.get())
-            uav.set_battery(init_batt, min_batt)
-            # add minimum-battery condition
-            succeed = self.update_functions(
-                ['minimum-battery'], [[KeyValue('v', uav.namespace)]],
-                [min_batt], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
-            resp = ActionExecutor.ACTION_SUCCESS if (
-                succeed and self._preflightcheck(preflightcheck)
-            ) else ActionExecutor.ACTION_FAIL
-        except ValueError:
-            rospy.logwarn(
-                'Pre-flight check for %s doesn\'t have correct inputs!' %
-                uav.namespace)
-            resp = ActionExecutor.ACTION_FAIL
-        if (rospy.Time.now() - start) > duration:
-            resp = ActionExecutor.OUT_OF_DURATION
-        return resp
-
-    def _preflightcheck(self, preflightcheck):
-        pilot = preflightcheck._pilot.get() != ''
-        gc = preflightcheck._gc.get() != ''
-        location = preflightcheck._location.get() != ''
-        takeoff_amsl = ('%.2f' %
-                        float(preflightcheck._takeoff_amsl.get())) > 0.
-        planned_agl = ('%.2f' % float(preflightcheck._planned_agl.get())) > 0.
-        filled = (pilot and gc and location and takeoff_amsl and planned_agl)
-
-        rf_noise = preflightcheck._rf_noise.get()
-        airframe = preflightcheck._airframe.get()
-        hatch = preflightcheck._hatch.get()
-        range_check = preflightcheck._range_check.get()
-        ground_station = preflightcheck._ground_station.get()
-        cl = rf_noise and airframe and hatch and range_check and ground_station
-
-        telem = preflightcheck._telemetry_check.get()
-        transmitter = preflightcheck._transmitter_check.get()
-        magnetometer = preflightcheck._magnetometer_check.get()
-        gps = preflightcheck._gps_check.get()
-        ahrs = preflightcheck._ahrs_check.get()
-        cm = preflightcheck._camera_check.get()
-        cl2 = telem and transmitter and magnetometer and gps and ahrs and cm
-
-        barometer = preflightcheck._barometer_check.get()
-        motor = preflightcheck._motor_check.get()
-        airtraf = preflightcheck._airtraffic_check.get()
-        people = preflightcheck._people_check.get()
-        pilot_ch = preflightcheck._pilot_check.get()
-        gpsch = preflightcheck._gps_check.get()
-        cl3 = motor and barometer and airtraf and people and pilot_ch and gpsch
-        return filled and cl and cl2 and cl3
 
     def _apply_operator_effect(self, op_name, dispatch_params):
         """
@@ -409,7 +345,7 @@ class PlannerInterface(object):
 
     def _action(self, action_dispatch, action_func, action_params=list()):
         """
-        Template uav action to respond to the dispatched action
+        Template asv action to respond to the dispatched action
         """
         self.publish_feedback(action_dispatch.action_id, 'action enabled')
         start_time = rospy.Time(action_dispatch.dispatch_time)
@@ -436,122 +372,54 @@ class PlannerInterface(object):
         duration = rospy.Duration(msg.duration)
         # parse action message
         nme = [parm.value for parm in msg.parameters if parm.key == 'v'][0]
-        uav = [i for i in self.uavs if i.namespace == nme]
-        if msg.name == 'uav_preflightcheck':
-            self._action(msg, self.preflightcheck, [uav[0], duration])
-        elif msg.name == 'uav_guide':
-            self._action(msg, uav[0].guided_mode, [duration])
-        elif msg.name == 'uav_request_arm':
-            self._action(msg, uav[0].request_arm, [duration])
-        elif msg.name == 'uav_takeoff':
-            self._action(msg, uav[0].takeoff,
-                         [rospy.get_param('~takeoff_altitude', 10.), duration])
-        elif msg.name == 'uav_goto_waypoint':
+        asv = [i for i in self.asvs if i.namespace == nme]
+        if msg.name == 'asv_request_arm':
+            self._action(msg, asv[0].arm, [duration])
+        elif (msg.name == 'asv_goto_waypoint') or (
+                msg.name == 'asv_goto_waypoint_with_uav'):
             self._action(msg, self.goto_waypoint,
-                         [uav[0], msg.parameters, duration])
-        elif msg.name == 'uav_rtl' or msg.name == 'uav_lowbat_return':
-            self._action(msg, uav[0].return_to_launch, [True, duration])
-
-    def _landing_update(self):
-        """
-        Add or remove landing/airborne facts on ROSPlan knowledge base
-        """
-        landed_uav = list()
-        params = list()
-        pred_names = list()
-        update_types = list()
-        attributes = self._proposition_proxy('landed').attributes
-        for attribute in attributes:
-            name = attribute.values[0].value
-            uav = [i for i in self.uavs if i.namespace == name]
-            if len(uav):
-                landed_uav.append(name)
-                if not uav[0].landed:
-                    pred_names.extend(['landed', 'airborne'])
-                    params.extend([[KeyValue('v', uav[0].namespace)],
-                                   [KeyValue('v', uav[0].namespace)]])
-                    update_types.extend([
-                        KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE,
-                        KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
-                    ])
-        for uav in self.uavs:
-            if not (uav.namespace in landed_uav) and uav.landed:
-                pred_names.extend(['landed', 'airborne'])
-                params.extend([[KeyValue('v', uav.namespace)],
-                               [KeyValue('v', uav.namespace)]])
-                update_types.extend([
-                    KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
-                    KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE
-                ])
-        if pred_names != list():
-            self.update_predicates(pred_names, params, update_types)
-
-    def _guide_update(self):
-        """
-        Add or remove guide mode facts on ROSPlan knowledge base
-        """
-        guided_uav = list()
-        params = list()
-        pred_names = list()
-        update_types = list()
-        attributes = self._proposition_proxy('guided').attributes
-        for attribute in attributes:
-            name = attribute.values[0].value
-            uav = [i for i in self.uavs if i.namespace == name]
-            if len(uav):
-                guided_uav.append(name)
-                if uav[0].state.mode != 'GUIDED':
-                    pred_names.extend(['guided'])
-                    params.extend([[KeyValue('v', uav[0].namespace)]])
-                    update_types.extend([
-                        KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE,
-                    ])
-        for uav in self.uavs:
-            if not (uav.namespace in guided_uav
-                    ) and uav.state.mode == 'GUIDED':
-                pred_names.extend(['guided'])
-                params.extend([[KeyValue('v', uav.namespace)]])
-                update_types.extend([
-                    KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
-                ])
-        if pred_names != list():
-            self.update_predicates(pred_names, params, update_types)
+                         [asv[0], msg.parameters, duration])
+        elif msg.name == 'asv_rtl' or msg.name == 'asv_lowfuel_return':
+            self._action(msg, asv[0].return_to_launch, [duration])
+        elif (msg.name == 'asv_rtl_with_uav') or (
+                msg.name == 'asv_lowfuel_return_with_uav'):
+            self._action(msg, asv[0].return_to_launch, [duration])
 
     def _arm_update(self):
         """
         Add or remove arm facts on ROSPlan knowledge base
         """
-        armed_uav = list()
+        armed_asv = list()
         params = list()
         pred_names = list()
         update_types = list()
         attributes = self._proposition_proxy('armed').attributes
         for attribute in attributes:
             name = attribute.values[0].value
-            uav = [i for i in self.uavs if i.namespace == name]
-            if len(uav):
-                armed_uav.append(name)
-                if not uav[0].state.armed:
+            asv = [i for i in self.asvs if i.namespace == name]
+            if len(asv):
+                armed_asv.append(name)
+                if not asv[0].state.armed:
                     pred_names.extend(['armed'])
-                    params.extend([[KeyValue('v', uav[0].namespace)]])
+                    params.extend([[KeyValue('v', asv[0].namespace)]])
                     update_types.extend([
                         KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE,
                     ])
-        for uav in self.uavs:
-            if not (uav.namespace in armed_uav) and uav.state.armed:
+        for asv in self.asvs:
+            if not (asv.namespace in armed_asv) and asv.state.armed:
                 pred_names.extend(['armed'])
-                params.extend([[KeyValue('v', uav.namespace)]])
+                params.extend([[KeyValue('v', asv.namespace)]])
                 update_types.extend([
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
                 ])
         if pred_names != list():
             self.update_predicates(pred_names, params, update_types)
 
-    def _wp_update(self):
+    def _uav_wp_update(self, cur_wp, prev_wp):
         """
-        Add or remove waypoint facts on ROSPlan knowledge base
+        Add UAV asv-waypoint facts on ROSPlan knowledge base
+        when UAV is at a ASV
         """
-        wp_uav = list()
         params = list()
         pred_names = list()
         update_types = list()
@@ -559,62 +427,106 @@ class PlannerInterface(object):
         for attribute in attributes:
             name = attribute.values[0].value
             uav = [i for i in self.uavs if i.namespace == name]
-            if len(uav):
-                wp_uav.append(name)
-                at = int(re.findall(r'\d+', attribute.values[1].value)[0])
-                if uav[0]._current_wp != -1 and at != uav[0]._current_wp:
-                    # add current wp that uav resides
+            if len(uav) and attribute.values[1].value == 'uav_wp0':
+                attributes = self._proposition_proxy('landed').attributes
+                uav2 = [i for i in self.uavs if i.namespace == name]
+                if len(uav2) and uav2[0].namespace == uav[0].namespace:
+                    # add current wp that asv resides
                     pred_names.append('at')
                     params.append([
                         KeyValue('v', uav[0].namespace),
-                        KeyValue('wp', 'uav_wp%d' % uav[0]._current_wp)
+                        KeyValue('wp', 'asv_wp%d' % cur_wp)
                     ])
                     update_types.append(
                         KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
-                    # remove previous wp that uav resided
+                    # remove previous wp that asv resided
                     pred_names.append('at')
                     params.append([
                         KeyValue('v', uav[0].namespace),
-                        KeyValue('wp', 'uav_wp%d' % at)
+                        KeyValue('wp', 'asv_wp%d' % prev_wp)
+                    ])
+                    update_types.append(
+                        KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE)
+        return pred_names, params, update_types
+
+    def _wp_update(self):
+        """
+        Add or remove waypoint facts on ROSPlan knowledge base
+        """
+        wp_asv = list()
+        params = list()
+        pred_names = list()
+        update_types = list()
+        attributes = self._proposition_proxy('at').attributes
+        for attribute in attributes:
+            name = attribute.values[0].value
+            asv = [i for i in self.asvs if i.namespace == name]
+            if len(asv):
+                wp_asv.append(name)
+                at = int(re.findall(r'\d+', attribute.values[1].value)[0])
+                if asv[0]._current_wp != -1 and at != asv[0]._current_wp:
+                    # add current wp that asv resides
+                    pred_names.append('at')
+                    params.append([
+                        KeyValue('v', asv[0].namespace),
+                        KeyValue('wp', 'asv_wp%d' % asv[0]._current_wp)
+                    ])
+                    update_types.append(
+                        KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
+                    # remove previous wp that asv resided
+                    pred_names.append('at')
+                    params.append([
+                        KeyValue('v', asv[0].namespace),
+                        KeyValue('wp', 'asv_wp%d' % at)
                     ])
                     update_types.append(
                         KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE)
                     # update visited state
                     pred_names.append('visited')
                     params.append(
-                        [KeyValue('wp', 'uav_wp%d' % uav[0]._current_wp)])
+                        [KeyValue('wp', 'asv_wp%d' % asv[0]._current_wp)])
                     update_types.append(
                         KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
-        for uav in self.uavs:
-            if not (uav.namespace in wp_uav) and uav._current_wp != -1:
-                # add current wp that uav resides
+                    if self.uav_carrier == asv[0].namespace:
+                        result = self._uav_wp_update(asv[0]._current_wp, at)
+                        pred_names.extend(result[0])
+                        params.extend(result[1])
+                        update_types.extend(result[2])
+        for asv in self.asvs:
+            if not (asv.namespace in wp_asv) and asv._current_wp != -1:
+                # add current wp that asv resides
                 pred_names.append('at')
                 params.append([
-                    KeyValue('v', uav.namespace),
-                    KeyValue('wp', 'uav_wp%d' % uav._current_wp)
+                    KeyValue('v', asv.namespace),
+                    KeyValue('wp', 'asv_wp%d' % asv._current_wp)
                 ])
                 update_types.append(
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
                 # update visited state
                 pred_names.append('visited')
-                params.append([KeyValue('wp', 'uav_wp%d' % uav._current_wp)])
+                params.append([KeyValue('wp', 'asv_wp%d' % asv._current_wp)])
                 update_types.append(
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
+                if self.uav_carrier == asv[0].namespace:
+                    result = self._uav_wp_update(asv[0]._current_wp, at)
+                    pred_names.extend(result[0])
+                    params.extend(result[1])
+                    update_types.extend(result[2])
         if pred_names != list():
             self.update_predicates(pred_names, params, update_types)
 
-    def _battery_update(self):
+    def _fuel_update(self):
         """
-        Update battery value on ROSPlan knowledge base
+        Update fuel value on ROSPlan knowledge base
         """
-        for uav in self.uavs:
-            # battery status update
+        for asv in self.asvs:
+            # fuel status update
             self.update_functions(
-                ['battery-amount', 'minimum-battery'],
-                [[KeyValue('v', uav.namespace)],
-                 [KeyValue('v', uav.namespace)]],
-                [np.mean(uav.battery_voltages), uav.MINIMUM_VOLTAGE], [
+                ['fuel-percentage', 'minimum-fuel'],
+                [[KeyValue('v', asv.namespace)],
+                 [KeyValue('v', asv.namespace)]],
+                [np.mean(asv.fuels), asv.MINIMUM_FUEL], [
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
                 ])
-            self.lowbat[uav.namespace] = uav.low_battery
+            self.lowfuel[asv.namespace] = asv.low_fuel

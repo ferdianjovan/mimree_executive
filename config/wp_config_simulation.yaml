@@ -11,6 +11,7 @@
     - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593274, rel_alt:  70.0}
   asvs:
     - halcyon
+  uav_carrier: halcyon
   asv_waypoints:
     - {hold_time:   2.0, radius: 2.0, yaw: 0.0, lat: 43.799237, long: 28.594263, takeoff: False}
     - {hold_time: 180.0, radius: 2.0, yaw: 0.0, lat: 43.799336, long: 28.593810, takeoff: True}
@@ -27,4 +28,5 @@
     - {hold_time: 2.0, radius: 1.0, yaw: 0.0, lat: 43.799165, long: 28.593273, rel_alt: 150.0}
     - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593274, rel_alt:  70.0}
   asvs: []
+  uav_carrier: '' 
   asv_waypoints: []

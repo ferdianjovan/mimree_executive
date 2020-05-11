@@ -23,6 +23,7 @@
     )
 
     (:predicates
+        (carrier ?v - asv)
         (guided ?v - uav)
         (landed ?v - uav)
         (airborne ?v - uav)
@@ -72,6 +73,7 @@
             (over all (connected ?from ?to))
             (over all (armed ?boat))
             (over all (landed ?drone))
+            (over all (carrier ?boat))
         )
         :effect (and
             (at start (not (at ?boat ?from)))
@@ -109,6 +111,7 @@
             (over all (landed ?drone))
             (over all (home ?to))
             (over all (armed ?boat))
+            (over all (carrier ?boat))
             (over all (connected ?from ?to))
         )
         :effect (and 
@@ -121,42 +124,35 @@
         )
     )
 
-    (:durative-action asv_lowbat_return
+    (:durative-action asv_lowfuel_return
         :parameters (?v - asv ?from ?to - asv_waypoint)
         :duration (= ?duration 420)
         :condition (and
-            (over all (connected ?from ?to))
             (over all (home ?to))
             (over all (armed ?v))
+            (over all (= ?from ?to))
             (at start (at ?v ?from))
             (at start (<= (fuel-percentage ?v) (minimum-fuel ?v)))
         )
         :effect (and 
-            (at end (at ?v ?to))
-            (at end (visited ?to))
-            (at start (not (at ?v ?from)))
             (decrease (fuel-percentage ?v) (* 0.01 #t))
         )
     )
 
-    (:durative-action asv_lowbat_return_with_uav
+    (:durative-action asv_lowfuel_return_with_uav
         :parameters (?boat - asv ?drone - uav ?from ?to - asv_waypoint)
         :duration (= ?duration 420)
         :condition (and
-            (over all (connected ?from ?to))
             (over all (landed ?drone))
             (over all (home ?to))
             (over all (armed ?boat))
+            (over all (= ?from ?to))
+            (over all (carrier ?boat))
             (at start (at ?boat ?from))
             (at start (at ?drone ?from))
             (at start (<= (fuel-percentage ?boat) (minimum-fuel ?boat)))
         )
         :effect (and 
-            (at end (at ?boat ?to))
-            (at end (at ?drone ?to))
-            (at end (visited ?to))
-            (at start (not (at ?boat ?from)))
-            (at start (not (at ?drone ?from)))
             (decrease (fuel-percentage ?boat) (* 0.01 #t))
         )
     )
