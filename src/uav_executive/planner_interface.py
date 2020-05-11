@@ -3,6 +3,7 @@
 # 3rd Party Packages
 import re
 from threading import Lock
+
 import numpy as np
 # ROS Packages
 import rospy
@@ -14,7 +15,6 @@ from rosplan_knowledge_msgs.srv import (GetAttributeService,
                                         GetDomainPredicateDetailsService,
                                         KnowledgeUpdateService,
                                         KnowledgeUpdateServiceRequest)
-
 from uav_executive.executor import ActionExecutor
 from uav_executive.preflightcheck import PreFlightCheck
 
@@ -101,25 +101,29 @@ class PlannerInterface(object):
         """
         if len(self.uavs) == 1:
             self._rate.sleep()
+            # Remove current goal
             update_types = [
                 KnowledgeUpdateServiceRequest.REMOVE_GOAL
                 for _ in self.goal_state[0]
             ]
-            self.uav.update_predicates(self.goal_state[0], self.goal_state[1],
-                                       update_types)
+            self.update_predicates(self.goal_state[0], self.goal_state[1],
+                                   update_types)
             self._rate.sleep()
+            # Add new goal
             pred_names = ['landed', 'at']
             params = [
-                [KeyValue('v', self.uav.name)],
-                [KeyValue('v', self.uav.name),
-                 KeyValue('wp', 'uav_wp0')],
+                [KeyValue('v', self.uavs[0].namespace)],
+                [
+                    KeyValue('v', self.uavs[0].namespace),
+                    KeyValue('wp', 'uav_wp0')
+                ],
             ]
             self.goal_state = (pred_names, params)
             update_types = [
                 KnowledgeUpdateServiceRequest.ADD_GOAL,
                 KnowledgeUpdateServiceRequest.ADD_GOAL
             ]
-            self.uav.update_predicates(pred_names, params, update_types)
+            self.update_predicates(pred_names, params, update_types)
             self._rate.sleep()
 
     def inspection_mission(self):
@@ -453,11 +457,7 @@ class PlannerInterface(object):
             uav = [i for i in self.uavs if i.namespace == nme][0]
             self._action(msg, self.goto_waypoint,
                          [uav, msg.parameters, duration])
-        elif msg.name == 'uav_rtl':
-            nme = [parm.value for parm in msg.parameters if parm.key == 'v'][0]
-            uav = [i for i in self.uavs if i.namespace == nme][0]
-            self._action(msg, uav.return_to_launch, [False, duration])
-        elif msg.name == 'uav_lowbat_return':
+        elif msg.name == 'uav_rtl' or msg.name == 'uav_lowbat_return':
             nme = [parm.value for parm in msg.parameters if parm.key == 'v'][0]
             uav = [i for i in self.uavs if i.namespace == nme][0]
             self._action(msg, uav.return_to_launch, [False, duration])

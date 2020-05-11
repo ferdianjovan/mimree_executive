@@ -4,13 +4,13 @@
 import numpy as np
 # ROS packages
 import rospy
-from sensor_msgs.msg import BatteryState, NavSatFix
-from std_msgs.msg import Float64, Header
 # MAVROS packages
-from mavros_msgs.msg import (HomePosition, State, Waypoint, WaypointReached)
+from mavros_msgs.msg import HomePosition, State, Waypoint, WaypointReached
 from mavros_msgs.srv import (CommandBool, CommandHome, CommandLong, CommandTOL,
                              SetMode, WaypointClear, WaypointPush,
                              WaypointSetCurrent)
+from sensor_msgs.msg import BatteryState, NavSatFix
+from std_msgs.msg import Float64, Header
 
 
 class ActionExecutor(object):
@@ -388,7 +388,8 @@ class ActionExecutor(object):
             self._rate.sleep()
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
-        self.guided_mode(duration=duration, mode='loiter')
+        if not (self.low_battery or self.external_intervened):
+            self.guided_mode(duration=duration)
         response = int(waypoint == self.wp_reached)
         if (rospy.Time.now() - start) > duration:
             response = self.OUT_OF_DURATION
