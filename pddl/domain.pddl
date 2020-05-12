@@ -214,7 +214,7 @@
 
     (:durative-action uav_goto_waypoint
         :parameters (?v - uav ?from - waypoint ?to - uav_waypoint)
-        :duration (= ?duration 300)
+        :duration (= ?duration 600)
         :condition (and
             (at start (at ?v ?from))
             (at start (> (battery-amount ?v) (minimum-battery ?v)))

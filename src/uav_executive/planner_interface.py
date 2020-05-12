@@ -34,6 +34,7 @@ class PlannerInterface(object):
         """
         self.goal_state = list()
         self.waypoints = uav_waypoints
+        self.low_battery_mission = False
         self._rate = rospy.Rate(update_frequency)
         self.lowbat = {name: False for name in names}
         self.takeoff_wps = self.get_takeoff_wps(asv_waypoints)
@@ -82,14 +83,15 @@ class PlannerInterface(object):
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.fact_update)
         rospy.Timer(50 * self._rate.sleep_dur, self.function_update)
+        rospy.sleep(50 * self._rate.sleep_dur)
 
     def get_takeoff_wps(self, waypoints):
         """
         Get ASV areas where UAV can takeoff
         """
         takeoff_wps = [
-            'asv_wp' + str(idx) for idx, val in enumerate(waypoints)
-            if val['takeoff']
+            'asv_wp' + str(idx + 1) for idx, val in enumerate(waypoints)
+            if bool(val['takeoff'])
         ]
         if takeoff_wps == []:
             takeoff_wps = ['uav_wp0']
@@ -259,16 +261,21 @@ class PlannerInterface(object):
         connections = [(i, i + 1) for i, _ in enumerate(self.waypoints)]
         connections.extend([(0, len(self.waypoints))])
         connections.extend([(j, i) for i, j in connections])
-        # add wp connection from takeoff waypoint to home and last wp
-        connections.extend([(i, 'uav_wp0') for i in self.takeoff_wps
-                            if ('asv' in i)])
-        connections.extend([(i, 'uav_wp%d' + len(self.waypoints))
-                            for i in self.takeoff_wps if ('asv' in i)])
         succeed = self.update_predicates(
             ['connected' for _ in connections], [[
                 KeyValue('wp1', 'uav_wp' + str(i[0])),
                 KeyValue('wp2', 'uav_wp' + str(i[1]))
             ] for i in connections],
+            [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE for _ in connections])
+        # add wp connection from takeoff waypoint to home and last wp
+        connections = [(i, 'uav_wp0') for i in self.takeoff_wps
+                       if ('asv' in i)]
+        connections.extend([(i, 'uav_wp%d' % len(self.waypoints))
+                            for i in self.takeoff_wps if ('asv' in i)])
+        succeed = self.update_predicates(
+            ['connected' for _ in connections],
+            [[KeyValue('wp1', i[0]),
+              KeyValue('wp2', i[1])] for i in connections],
             [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE for _ in connections])
         # add home wp position
         succeed = succeed and self.update_predicates(
@@ -306,8 +313,8 @@ class PlannerInterface(object):
             if param.key == 'to':
                 waypoint = int(re.findall(r'\d+', param.value)[0])
                 break
-        response = uav.goto(
-            waypoint, dur) if waypoint != -1 else ActionExecutor.ACTION_FAIL
+        response = uav.goto(waypoint, dur, self.low_battery_mission
+                            ) if waypoint != -1 else ActionExecutor.ACTION_FAIL
         return response
 
     def preflightcheck(self, uav, duration=rospy.Duration(600, 0)):
@@ -435,22 +442,27 @@ class PlannerInterface(object):
         """
         duration = rospy.Duration(msg.duration)
         # parse action message
-        nme = [parm.value for parm in msg.parameters if parm.key == 'v'][0]
-        uav = [i for i in self.uavs if i.namespace == nme]
-        if msg.name == 'uav_preflightcheck':
-            self._action(msg, self.preflightcheck, [uav[0], duration])
-        elif msg.name == 'uav_guide':
-            self._action(msg, uav[0].guided_mode, [duration])
-        elif msg.name == 'uav_request_arm':
-            self._action(msg, uav[0].request_arm, [duration])
-        elif msg.name == 'uav_takeoff':
-            self._action(msg, uav[0].takeoff,
-                         [rospy.get_param('~takeoff_altitude', 10.), duration])
-        elif msg.name == 'uav_goto_waypoint':
-            self._action(msg, self.goto_waypoint,
-                         [uav[0], msg.parameters, duration])
-        elif msg.name == 'uav_rtl' or msg.name == 'uav_lowbat_return':
-            self._action(msg, uav[0].return_to_launch, [True, duration])
+        uav_names = [uav.namespace for uav in self.uavs]
+        uav_name = [
+            parm.value for parm in msg.parameters if parm.value in uav_names
+        ]
+        if len(uav_name):
+            uav = [i for i in self.uavs if i.namespace == uav_name[0]][0]
+            if msg.name == 'uav_preflightcheck':
+                self._action(msg, self.preflightcheck, [uav, duration])
+            elif msg.name == 'uav_guide':
+                self._action(msg, uav.guided_mode, [duration])
+            elif msg.name == 'uav_request_arm':
+                self._action(msg, uav.request_arm, [duration])
+            elif msg.name == 'uav_takeoff':
+                self._action(
+                    msg, uav.takeoff,
+                    [rospy.get_param('~takeoff_altitude', 10.), duration])
+            elif msg.name == 'uav_goto_waypoint':
+                self._action(msg, self.goto_waypoint,
+                             [uav, msg.parameters, duration])
+            elif msg.name == 'uav_rtl' or msg.name == 'uav_lowbat_return':
+                self._action(msg, uav.return_to_launch, [True, duration])
 
     def _landing_update(self):
         """
@@ -613,7 +625,7 @@ class PlannerInterface(object):
                 ['battery-amount', 'minimum-battery'],
                 [[KeyValue('v', uav.namespace)],
                  [KeyValue('v', uav.namespace)]],
-                [np.mean(uav.battery_voltages), uav.MINIMUM_VOLTAGE], [
+                [np.mean(uav.battery_voltages), uav.MINIMUM_VOLTAGE - 0.15], [
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
                 ])

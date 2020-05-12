@@ -4,7 +4,6 @@
 import re
 from threading import Lock
 
-import numpy as np
 # ROS Packages
 import rospy
 from asv_executive.executor import ActionExecutor
@@ -32,13 +31,18 @@ class PlannerInterface(object):
         A Class that interfaces with ROSPlan for dispatching asv actions and
         updating asv knowledge during a mission
         """
-        self.goal_state = list()
         self.uavs = uavs
+        self.goal_state = list()
+        self.low_fuel_mission = False
         self.uav_carrier = uav_carrier
         self.waypoints = asv_waypoints
         self._rate = rospy.Rate(update_frequency)
         self.lowfuel = {name: False for name in names}
-        self.asvs = [ActionExecutor(name, self.waypoints) for name in names]
+        self.asvs = [
+            ActionExecutor(name, self.waypoints) for name in names
+            if name != uav_carrier
+        ]
+        self.asvs.append(ActionExecutor(uav_carrier, self.waypoints, uavs))
 
         # Rosplan Service proxies
         rospy.loginfo('Waiting for service /rosplan_knowledge_base/update ...')
@@ -83,6 +87,7 @@ class PlannerInterface(object):
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.fact_update)
         rospy.Timer(50 * self._rate.sleep_dur, self.function_update)
+        rospy.sleep(50 * self._rate.sleep_dur)
 
     def low_fuel_return_mission(self):
         """
@@ -99,19 +104,13 @@ class PlannerInterface(object):
                                    update_types)
             self._rate.sleep()
             # Add new goal
-            pred_names = ['landed', 'at']
-            params = [
-                [KeyValue('v', self.asvs[0].namespace)],
-                [
-                    KeyValue('v', self.asvs[0].namespace),
-                    KeyValue('wp', 'asv_wp0')
-                ],
-            ]
+            pred_names = ['at']
+            params = [[
+                KeyValue('v', self.asvs[0].namespace),
+                KeyValue('wp', 'asv_wp0')
+            ]]
             self.goal_state = (pred_names, params)
-            update_types = [
-                KnowledgeUpdateServiceRequest.ADD_GOAL,
-                KnowledgeUpdateServiceRequest.ADD_GOAL
-            ]
+            update_types = [KnowledgeUpdateServiceRequest.ADD_GOAL]
             self.update_predicates(pred_names, params, update_types)
             self._rate.sleep()
 
@@ -127,12 +126,10 @@ class PlannerInterface(object):
             KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.waypoints
         ]
         # 'all asvs must be back at home' goals
-        pred_names.extend(['at' for _ in self.asvs])
-        params.extend(
-            [[KeyValue('v', asv.namespace),
-              KeyValue('wp', 'asv_wp0')] for asv in self.asvs])
-        update_types.extend(
-            [KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.asvs])
+        result = self._deploy_retrieve_mission()
+        pred_names.extend(result[0])
+        params.extend(result[1])
+        update_types.extend(result[2])
         self.goal_state = (pred_names, params)
         succeed = self.update_predicates(pred_names, params, update_types)
         self._rate.sleep()
@@ -142,6 +139,13 @@ class PlannerInterface(object):
         """
         ASV mission visiting all waypoints and coming back to launch pod
         """
+        pred_names, params, update_types = self._deploy_retrieve_mission()
+        self.goal_state = (pred_names, params)
+        succeed = self.update_predicates(pred_names, params, update_types)
+        self._rate.sleep()
+        return succeed
+
+    def _deploy_retrieve_mission(self):
         # 'all asvs must be back at home' goals
         pred_names = ['at' for _ in self.asvs]
         params = [[KeyValue('v', asv.namespace),
@@ -149,10 +153,14 @@ class PlannerInterface(object):
         update_types = [
             KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.asvs
         ]
-        self.goal_state = (pred_names, params)
-        succeed = self.update_predicates(pred_names, params, update_types)
-        self._rate.sleep()
-        return succeed
+        if self.uav_carrier != "":
+            pred_names.extend(['at' for _ in self.uavs])
+            params.extend(
+                [[KeyValue('v', uav.namespace),
+                  KeyValue('wp', 'asv_wp0')] for uav in self.uavs])
+            update_types.extend(
+                [KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.uavs])
+        return pred_names, params, update_types
 
     def fact_update(self, event):
         """
@@ -257,11 +265,6 @@ class PlannerInterface(object):
         connections = [(i, i + 1) for i, _ in enumerate(self.waypoints)]
         connections.extend([(0, len(self.waypoints))])
         connections.extend([(j, i) for i, j in connections])
-        # add wp connection from takeoff waypoint to home and last wp
-        connections.extend([(i, 'asv_wp0') for i in self.takeoff_wps
-                            if ('asv' in i)])
-        connections.extend([(i, 'asv_wp%d' + len(self.waypoints))
-                            for i in self.takeoff_wps if ('asv' in i)])
         succeed = self.update_predicates(
             ['connected' for _ in connections], [[
                 KeyValue('wp1', 'asv_wp' + str(i[0])),
@@ -302,8 +305,8 @@ class PlannerInterface(object):
             if param.key == 'to':
                 waypoint = int(re.findall(r'\d+', param.value)[0])
                 break
-        response = asv.goto(
-            waypoint, dur) if waypoint != -1 else ActionExecutor.ACTION_FAIL
+        response = asv.goto(waypoint, dur, self.low_fuel_mission
+                            ) if waypoint != -1 else ActionExecutor.ACTION_FAIL
         return response
 
     def _apply_operator_effect(self, op_name, dispatch_params):
@@ -371,19 +374,23 @@ class PlannerInterface(object):
         """
         duration = rospy.Duration(msg.duration)
         # parse action message
-        nme = [parm.value for parm in msg.parameters if parm.key == 'v'][0]
-        asv = [i for i in self.asvs if i.namespace == nme]
-        if msg.name == 'asv_request_arm':
-            self._action(msg, asv[0].arm, [duration])
-        elif (msg.name == 'asv_goto_waypoint') or (
-                msg.name == 'asv_goto_waypoint_with_uav'):
-            self._action(msg, self.goto_waypoint,
-                         [asv[0], msg.parameters, duration])
-        elif msg.name == 'asv_rtl' or msg.name == 'asv_lowfuel_return':
-            self._action(msg, asv[0].return_to_launch, [duration])
-        elif (msg.name == 'asv_rtl_with_uav') or (
-                msg.name == 'asv_lowfuel_return_with_uav'):
-            self._action(msg, asv[0].return_to_launch, [duration])
+        asv_names = [asv.namespace for asv in self.asvs]
+        asv_name = [
+            parm.value for parm in msg.parameters if parm.value in asv_names
+        ]
+        if len(asv_name):
+            asv = [i for i in self.asvs if i.namespace == asv_name[0]][0]
+            if msg.name == 'asv_request_arm':
+                self._action(msg, asv.arm, [duration])
+            elif (msg.name == 'asv_goto_waypoint') or (
+                    msg.name == 'asv_goto_waypoint_with_uav'):
+                self._action(msg, self.goto_waypoint,
+                             [asv, msg.parameters, duration])
+            elif msg.name == 'asv_rtl' or msg.name == 'asv_lowfuel_return':
+                self._action(msg, asv.return_to_launch, [duration])
+            elif (msg.name == 'asv_rtl_with_uav') or (
+                    msg.name == 'asv_lowfuel_return_with_uav'):
+                self._action(msg, asv.return_to_launch, [duration])
 
     def _arm_update(self):
         """
@@ -415,7 +422,7 @@ class PlannerInterface(object):
         if pred_names != list():
             self.update_predicates(pred_names, params, update_types)
 
-    def _uav_wp_update(self, cur_wp, prev_wp):
+    def _uav_wp_update(self, cur_wp, prev_wp=None):
         """
         Add UAV asv-waypoint facts on ROSPlan knowledge base
         when UAV is at a ASV
@@ -439,14 +446,15 @@ class PlannerInterface(object):
                     ])
                     update_types.append(
                         KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
-                    # remove previous wp that asv resided
-                    pred_names.append('at')
-                    params.append([
-                        KeyValue('v', uav[0].namespace),
-                        KeyValue('wp', 'asv_wp%d' % prev_wp)
-                    ])
-                    update_types.append(
-                        KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE)
+                    if prev_wp is not None:
+                        # remove previous wp that asv resided
+                        pred_names.append('at')
+                        params.append([
+                            KeyValue('v', uav[0].namespace),
+                            KeyValue('wp', 'asv_wp%d' % prev_wp)
+                        ])
+                        update_types.append(
+                            KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE)
         return pred_names, params, update_types
 
     def _wp_update(self):
@@ -507,8 +515,8 @@ class PlannerInterface(object):
                 params.append([KeyValue('wp', 'asv_wp%d' % asv._current_wp)])
                 update_types.append(
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
-                if self.uav_carrier == asv[0].namespace:
-                    result = self._uav_wp_update(asv[0]._current_wp, at)
+                if self.uav_carrier == asv.namespace:
+                    result = self._uav_wp_update(asv._current_wp)
                     pred_names.extend(result[0])
                     params.extend(result[1])
                     update_types.extend(result[2])
@@ -525,7 +533,7 @@ class PlannerInterface(object):
                 ['fuel-percentage', 'minimum-fuel'],
                 [[KeyValue('v', asv.namespace)],
                  [KeyValue('v', asv.namespace)]],
-                [np.mean(asv.fuels), asv.MINIMUM_FUEL], [
+                [asv.fuel, asv.MINIMUM_FUEL - 15.], [
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
                 ])

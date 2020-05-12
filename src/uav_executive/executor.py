@@ -122,10 +122,9 @@ class ActionExecutor(object):
 
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.update_landing_status)
-        rospy.Timer(20 * self._rate.sleep_dur, self.intervene_observer)
+        rospy.Timer(10 * self._rate.sleep_dur, self.intervene_observer)
         rospy.Timer(self._rate.sleep_dur, self.update_wp_position)
         rospy.loginfo('Adding WPs ...')
-        rospy.sleep(10 * self._rate.sleep_dur)
         # Adding initial waypoints' configuration
         while not self.add_waypoints():
             self._rate.sleep()
@@ -153,11 +152,6 @@ class ActionExecutor(object):
             long_change = abs(self.home.geo.longitude -
                               msg.geo.longitude) > 5e-06
             self.home_moved = lat_change or long_change
-            if self.home_moved:
-                rospy.logwarn(
-                    'Home has moved from (%.6f, %.6f) to (%.6f, %.6f)' %
-                    (self.home.geo.latitude, self.home.geo.longitude,
-                     msg.geo.latitude, msg.geo.longitude))
         self.home = msg
 
     def _relative_alt_cb(self, msg):
@@ -180,7 +174,7 @@ class ActionExecutor(object):
         """
         self.battery_voltages[msg.header.seq % 100] = msg.voltage
         self.low_battery = (np.mean(self.battery_voltages) <=
-                            self.MINIMUM_VOLTAGE)
+                            self.MINIMUM_VOLTAGE) and (self._current_wp != 0)
 
     def update_wp_position(self, event):
         """
@@ -188,14 +182,14 @@ class ActionExecutor(object):
         """
         wp = -1
         for idx, waypoint in enumerate(self.waypoints):
-            latitude_cond = abs(self.global_pose.latitude -
-                                waypoint.x_lat) < 1e-05
-            longitude_cond = abs(self.global_pose.longitude -
-                                 waypoint.y_long) < 1e-05
-            altitude_cond = abs(self.global_pose.altitude -
-                                (self.home.geo.altitude +
-                                 waypoint.z_alt)) < 0.2
-            if latitude_cond and longitude_cond and altitude_cond:
+            temp = np.array([waypoint.x_lat, waypoint.y_long])
+            cur_pos = np.array([
+                self.global_pose.latitude,
+                self.global_pose.longitude,
+            ])
+            alt_diff = abs(self.global_pose.altitude -
+                           (self.home.geo.altitude + waypoint.z_alt))
+            if np.linalg.norm(cur_pos - temp) < 1e-5 and alt_diff < 0.2:
                 wp = idx
                 break
         self._current_wp = wp
@@ -359,7 +353,10 @@ class ActionExecutor(object):
             took_off = self.EXTERNAL_INTERVENTION
         return int(took_off)
 
-    def goto(self, waypoint, duration=rospy.Duration(60, 0)):
+    def goto(self,
+             waypoint,
+             duration=rospy.Duration(60, 0),
+             low_battery_trip=False):
         """
         Go to specific waypoint action
         """
@@ -382,7 +379,7 @@ class ActionExecutor(object):
         while (rospy.Time.now() - start < duration) and not (
                 rospy.is_shutdown()) and (not self.external_intervened) and (
                     (waypoint != self.wp_reached)):
-            if self.low_battery:
+            if not low_battery_trip and self.low_battery:
                 rospy.logwarn('Battery is below minimum voltage!')
                 break
             self._rate.sleep()
@@ -489,7 +486,8 @@ class ActionExecutor(object):
         Emergency land to home when home wobbles
         """
         # Clear current wps available
-        self._clear_wp_proxy()
+        if not self._clear_wp_proxy().success:
+            return
         # wps[0] must be home waypoint
         home_wp = Waypoint(Waypoint.FRAME_GLOBAL_REL_ALT, 21, False, False,
                            1.0, 1., 0, 0, self.home.geo.latitude,

@@ -36,10 +36,11 @@ class ActionExecutor(object):
         self.home = HomePosition()
         self.global_pose = NavSatFix()
         self.heading = 0.0
-        self.fuels = [self.INIT_FUEL for _ in range(100)]
+        self.fuel = self.INIT_FUEL
         self.low_fuel = False
         self._waypoints = waypoints
         self._current_wp = -1
+        self._rate = rospy.Rate(update_frequency)
 
         # Service proxies
         rospy.loginfo('Waiting for service /%s/mavros/mission/push ...' %
@@ -76,33 +77,34 @@ class ActionExecutor(object):
         # UAV service proxies for updating UAV home position
         if len(uavs):
             self._uav_home_proxies = {
-                uav: rospy.ServiceProxy('/%s/mavros/cmd/set_home' % uav,
-                                        CommandHome)
+                uav:
+                rospy.ServiceProxy('/%s/mavros/cmd/set_home' % uav.namespace,
+                                   CommandHome)
                 for uav in uavs
             }
             self.uav_home_wp = {uav: HomePosition() for uav in uavs}
             for uav in uavs:
-                rospy.Subscriber('/%s/mavros/home_position/home' % uav,
+                rospy.Subscriber('/%s/mavros/home_position/home' %
+                                 uav.namespace,
                                  HomePosition,
                                  lambda i: self._uav_home_cb(i, uav),
                                  queue_size=10)
             rospy.Timer(20 * self._rate.sleep_dur, self.update_uav_home_pos)
 
-        self._rate = rospy.Rate(update_frequency)
-
+        # Subscribers
+        rospy.Subscriber('/%s/mavros/state' % self.namespace,
+                         State,
+                         self._state_cb,
+                         queue_size=10)
         # halt until mavros is connected to a asv
         rospy.loginfo('Waiting for a connection between MAVROS and ASV ...')
         while (not self.state.connected):
             self._rate.sleep()
-        # Subscribers
+
         rospy.Subscriber('/%s/mavros/global_position/compass_hdg' %
                          self.namespace,
                          Float64,
                          self._heading_cb,
-                         queue_size=10)
-        rospy.Subscriber('/%s/mavros/state' % self.namespace,
-                         State,
-                         self._state_cb,
                          queue_size=10)
         rospy.Subscriber('/%s/mavros/home_position/home' % self.namespace,
                          HomePosition,
@@ -122,10 +124,11 @@ class ActionExecutor(object):
                          queue_size=10)
 
         # Auto call functions
-        rospy.Timer(20 * self._rate.sleep_dur, self.intervene_observer)
+        rospy.Timer(10 * self._rate.sleep_dur, self.intervene_observer)
         rospy.Timer(self._rate.sleep_dur, self.update_wp_position)
         rospy.loginfo('Adding WPs ...')
-        rospy.sleep(10 * self._rate.sleep_dur)
+        # change mode just to fill self.current_mode and self.previous_mode
+        self.guided_mode()
         # Adding initial waypoints' configuration
         while not self.add_waypoints():
             self._rate.sleep()
@@ -172,23 +175,24 @@ class ActionExecutor(object):
         """
         ASV Battery state callback
         """
-        self.fuels[msg.header.seq % 100] = msg.percentage * 100.
-        self.low_fuel = (np.mean(self.fuels) <= self.MINIMUM_FUEL)
+        self.fuel = msg.percentage * 100.
+        self.low_fuel = (self.fuel <=
+                         self.MINIMUM_FUEL) and not (self._current_wp == 0)
 
     def update_uav_home_pos(self, event):
         """
         Update UAV home position when ASV moves
         """
-        for uav in self.uav_home_proxies.keys():
+        for uav in self._uav_home_proxies.keys():
             landing_pad_lat = self.global_pose.latitude - 4e-05 * np.cos(
                 self.heading)
             landing_pad_long = self.global_pose.longitude - 4e-05 * np.sin(
                 self.heading)
-            latitude_cond = abs(self.uav_home_wp[uav].geo.latitude -
-                                landing_pad_lat) < 5e-06
-            longitude_cond = abs(self.global_pose.longitude -
-                                 landing_pad_long) < 5e-06
-            if latitude_cond and longitude_cond:
+            home_wp = np.array([
+                self.uav_home_wp[uav].geo.latitude, self.global_pose.longitude
+            ])
+            landing_pad = np.array([landing_pad_lat, landing_pad_long])
+            if np.linalg.norm(home_wp - landing_pad) > 5e-06:
                 self._uav_home_proxies[uav](False, landing_pad_lat,
                                             landing_pad_long, 0.0)
 
@@ -198,11 +202,10 @@ class ActionExecutor(object):
         """
         wp = -1
         for idx, waypoint in enumerate(self.waypoints):
-            latitude_cond = abs(self.global_pose.latitude -
-                                waypoint.x_lat) < 2.5e-05
-            longitude_cond = abs(self.global_pose.longitude -
-                                 waypoint.y_long) < 2.5e-05
-            if latitude_cond and longitude_cond:
+            waypoint = np.array([waypoint.x_lat, waypoint.y_long])
+            cur_pos = np.array(
+                [self.global_pose.latitude, self.global_pose.longitude])
+            if np.linalg.norm(cur_pos - waypoint) < 5e-05:
                 wp = idx
                 break
         self._current_wp = wp
@@ -214,7 +217,7 @@ class ActionExecutor(object):
         rospy.loginfo('Setting up fuel requirements...')
         self.INIT_FUEL = init_batt
         self.MINIMUM_FUEL = min_batt
-        self.fuels = [self.INIT_FUEL for _ in range(100)]
+        self.fuel = self.INIT_FUEL
         self.low_fuel = False
 
     def intervene_observer(self, event):
@@ -329,7 +332,10 @@ class ActionExecutor(object):
             armed = self.EXTERNAL_INTERVENTION
         return int(armed)
 
-    def goto(self, waypoint, duration=rospy.Duration(60, 0)):
+    def goto(self,
+             waypoint,
+             duration=rospy.Duration(60, 0),
+             low_fuel_trip=False):
         """
         Go to specific waypoint action
         """
@@ -351,7 +357,7 @@ class ActionExecutor(object):
         while (rospy.Time.now() - start < duration) and not (
                 rospy.is_shutdown()) and (not self.external_intervened) and (
                     (waypoint != self.wp_reached)):
-            if self.low_fuel:
+            if not low_fuel_trip and self.low_fuel:
                 rospy.logwarn('Battery is below minimum voltage!')
                 break
             self._rate.sleep()

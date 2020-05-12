@@ -53,7 +53,7 @@ class MissionExec(object):
         rospy.Service('%s/resume_plan' % rospy.get_name(), Empty,
                       self.resume_plan)
         # Auto call functions
-        rospy.Timer(self._rate.sleep_dur, self.low_battery_replan)
+        rospy.Timer(50 * self._rate.sleep_dur, self.low_battery_replan)
 
     def load_mission_config_file(self, filename, configname):
         """
@@ -95,15 +95,25 @@ class MissionExec(object):
         """
         Assets return home due to low battery voltage
         """
+        replan = False
         if self.uav_exec is not None and True in self.uav_exec.lowbat.values():
             self.uav_exec.low_battery_return_mission(all_return=False)
+            self.uav_exec.low_battery_mission = True
+            replan = True
         if self.asv_exec is not None and True in self.asv_exec.lowfuel.values(
         ):
-            if self.asv_exec.low_fuel[self.asv_exec.uav_carrier]:
+            if self.uav_exec is not None and self.asv_exec.low_fuel[
+                    self.asv_exec.uav_carrier]:
                 self.uav_exec.low_battery_return_mission(all_return=True)
             self.asv_exec.low_fuel_return_mission()
-        if True in self.uav_exec.lowbat.values():
-            self.execute()
+            self.asv_exec.low_fuel_mission = True
+            replan = True
+        if replan:
+            achieved = self.execute()
+            if self.uav_exec is not None:
+                self.uav_exec.low_battery_mission = not achieved
+            if self.asv_exec is not None:
+                self.asv_exec.low_fuel_mission = not achieved
 
     def execute(self, event=True):
         """
