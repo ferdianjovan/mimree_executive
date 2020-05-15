@@ -1,12 +1,11 @@
 #!/usr/bin/env python
 
-import argparse
-
-import roslib
-# ROS Packages
-import rospy
 # 3rd Party Packages
 import yaml
+import argparse
+# ROS Packages
+import rospy
+import roslib
 from std_srvs.srv import Empty
 from rosplan_dispatch_msgs.srv import DispatchService
 from uav_executive.planner_interface import PlannerInterface as PIUAV
@@ -97,23 +96,26 @@ class MissionExec(object):
         """
         replan = False
         if self.uav_exec is not None and True in self.uav_exec.lowbat.values():
+            self._cancel_plan_proxy()
             self.uav_exec.low_battery_return_mission(all_return=False)
             self.uav_exec.low_battery_mission = True
             replan = True
         if self.asv_exec is not None and True in self.asv_exec.lowfuel.values(
         ):
-            if self.uav_exec is not None and self.asv_exec.low_fuel[
+            self._cancel_plan_proxy()
+            if self.uav_exec is not None and self.asv_exec.lowfuel[
                     self.asv_exec.uav_carrier]:
                 self.uav_exec.low_battery_return_mission(all_return=True)
             self.asv_exec.low_fuel_return_mission()
-            self.asv_exec.low_fuel_mission = True
+            self.asv_exec.lowfuel_mission = True
             replan = True
         if replan:
+            rospy.sleep(4 * self._rate.sleep_dur)
             achieved = self.execute()
             if self.uav_exec is not None:
                 self.uav_exec.low_battery_mission = not achieved
             if self.asv_exec is not None:
-                self.asv_exec.low_fuel_mission = not achieved
+                self.asv_exec.lowfuel_mission = not achieved
 
     def execute(self, event=True):
         """

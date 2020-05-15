@@ -9,13 +9,13 @@ from mavros_msgs.msg import HomePosition, State, Waypoint, WaypointReached
 from mavros_msgs.srv import (CommandBool, CommandHome, SetMode, WaypointClear,
                              WaypointPush, WaypointSetCurrent)
 from sensor_msgs.msg import BatteryState, NavSatFix
-from std_msgs.msg import Header, Float64
+from std_msgs.msg import Float64, Header
 
 
 class ActionExecutor(object):
 
     INIT_FUEL = 100.0
-    MINIMUM_FUEL = 20.0
+    MINIMUM_FUEL = 75.0
     EXTERNAL_INTERVENTION = -2
     OUT_OF_DURATION = -1
     ACTION_SUCCESS = 1
@@ -83,6 +83,7 @@ class ActionExecutor(object):
                 for uav in uavs
             }
             self.uav_home_wp = {uav: HomePosition() for uav in uavs}
+            self._uav_home_dist = {uav: float('inf') for uav in uavs}
             for uav in uavs:
                 rospy.Subscriber('/%s/mavros/home_position/home' %
                                  uav.namespace,
@@ -164,6 +165,11 @@ class ActionExecutor(object):
         Home position callback
         """
         self.home = msg
+        if len(self.waypoints):
+            home_wp = Waypoint(Waypoint.FRAME_GLOBAL_REL_ALT, 21, False, False,
+                               .6, 1., 0, 0, self.home.geo.latitude,
+                               self.home.geo.longitude, 0.)
+            self.waypoints[0] = home_wp
 
     def _global_pose_cb(self, msg):
         """
@@ -184,17 +190,26 @@ class ActionExecutor(object):
         Update UAV home position when ASV moves
         """
         for uav in self._uav_home_proxies.keys():
-            landing_pad_lat = self.global_pose.latitude - 4e-05 * np.cos(
-                self.heading)
-            landing_pad_long = self.global_pose.longitude - 4e-05 * np.sin(
-                self.heading)
             home_wp = np.array([
-                self.uav_home_wp[uav].geo.latitude, self.global_pose.longitude
+                self.uav_home_wp[uav].geo.latitude,
+                self.uav_home_wp[uav].geo.longitude
             ])
-            landing_pad = np.array([landing_pad_lat, landing_pad_long])
-            if np.linalg.norm(home_wp - landing_pad) > 5e-06:
-                self._uav_home_proxies[uav](False, landing_pad_lat,
-                                            landing_pad_long, 0.0)
+            if self._uav_home_dist[uav] == float('inf'):
+                if self.global_pose != NavSatFix():
+                    asv_home = np.array([
+                        self.global_pose.latitude, self.global_pose.longitude
+                    ])
+                    self._uav_home_dist[uav] = np.linalg.norm(home_wp -
+                                                              asv_home)
+                continue
+            landpad_lat = self.global_pose.latitude - self._uav_home_dist[
+                uav] * np.cos(self.heading)
+            landpad_long = self.global_pose.longitude - self._uav_home_dist[
+                uav] * np.sin(self.heading)
+            landpad = np.array([landpad_lat, landpad_long])
+            if np.linalg.norm(home_wp - landpad) > 1e-06:
+                self._uav_home_proxies[uav](False, landpad_lat, landpad_long,
+                                            0.)
 
     def update_wp_position(self, event):
         """

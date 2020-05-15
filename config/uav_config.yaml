@@ -160,8 +160,8 @@ fake_gps:
   use_vision: false       # ~vision (pose)
   # origin (default: Zürich)
   geo_origin:
-    lat: 43.798784          # latitude [degrees]
-    lon: 28.593649           # longitude [degrees]
+    lat: 43.798587          # latitude [degrees]
+    lon: 28.593537 # longitude [degrees]
     alt: 1.0            # altitude (height over the WGS-84 ellipsoid) [meters]
   eph: 2.0
   epv: 2.0

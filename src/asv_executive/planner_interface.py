@@ -109,8 +109,15 @@ class PlannerInterface(object):
                 KeyValue('v', self.asvs[0].namespace),
                 KeyValue('wp', 'asv_wp0')
             ]]
+            if len(self.uavs):
+                pred_names.extend(['at' for _ in self.uavs])
+                params.extend(
+                    [[KeyValue('v', uav.namespace),
+                      KeyValue('wp', 'asv_wp0')] for uav in self.uavs])
             self.goal_state = (pred_names, params)
-            update_types = [KnowledgeUpdateServiceRequest.ADD_GOAL]
+            update_types = [
+                KnowledgeUpdateServiceRequest.ADD_GOAL for _ in pred_names
+            ]
             self.update_predicates(pred_names, params, update_types)
             self._rate.sleep()
 

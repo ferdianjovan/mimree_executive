@@ -5,7 +5,8 @@ import numpy as np
 # ROS packages
 import rospy
 # MAVROS packages
-from mavros_msgs.msg import HomePosition, State, Waypoint, WaypointReached
+from mavros_msgs.msg import (HomePosition, State, StatusText, Waypoint,
+                             WaypointReached)
 from mavros_msgs.srv import (CommandBool, CommandHome, CommandLong, CommandTOL,
                              SetMode, WaypointClear, WaypointPush,
                              WaypointSetCurrent)
@@ -42,8 +43,10 @@ class ActionExecutor(object):
         self.low_battery = False
         self._waypoints = waypoints
         self._current_wp = -1
-        self._rel_alt = [0. for _ in range(15)]
+        self._rel_alt = [0. for _ in range(20)]
         self._rel_alt_seq = 0
+        self._status_text = ''
+        self._arm_status = [False for _ in range(5)]
 
         # Service proxies
         rospy.loginfo('Waiting for service /%s/mavros/cmd/command ...' %
@@ -119,6 +122,10 @@ class ActionExecutor(object):
                          WaypointReached,
                          self._wp_reached_cb,
                          queue_size=10)
+        rospy.Subscriber('/%s/mavros/statustext/recv' % self.namespace,
+                         StatusText,
+                         self._status_text_cb,
+                         queue_size=10)
 
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.update_landing_status)
@@ -128,6 +135,13 @@ class ActionExecutor(object):
         # Adding initial waypoints' configuration
         while not self.add_waypoints():
             self._rate.sleep()
+
+    def _status_text_cb(self, msg):
+        """
+        Status text call back
+        """
+        if msg.text == 'PreArm: Gyros not calibrated':
+            self._status_text = msg.text
 
     def _wp_reached_cb(self, msg):
         """
@@ -142,6 +156,7 @@ class ActionExecutor(object):
         if self.current_mode == '':
             self.current_mode = msg.mode
         self.state = msg
+        self._arm_status[msg.header.seq % len(self._arm_status)] = msg.armed
 
     def _home_cb(self, msg):
         """
@@ -158,7 +173,7 @@ class ActionExecutor(object):
         """
         Relative altitude callback
         """
-        self._rel_alt[self._rel_alt_seq % 15] = msg.data
+        self._rel_alt[self._rel_alt_seq % 20] = msg.data
         self._rel_alt_seq += 1
         self.rel_alt = np.mean(self._rel_alt)
 
@@ -219,7 +234,10 @@ class ActionExecutor(object):
         """
         Automated update landing (or flying) status
         """
-        self.landed = (not self.state.armed) or (self.rel_alt <= 0.1)
+        if self._status_text == 'PreArm: Gyros not calibrated':
+            self.landed = (False in self._arm_status)
+        else:
+            self.landed = (not self.state.armed) or (self.rel_alt <= 0.1)
 
     def add_waypoints(self, index=0):
         """
@@ -340,12 +358,15 @@ class ActionExecutor(object):
                    duration) and (not rospy.is_shutdown()
                                   ) and (self.rel_alt - altitude) < -0.5 and (
                                       not self.external_intervened):
-                if self.low_battery:
-                    rospy.logwarn('Battery is below minimum voltage!')
-                    break
                 if not took_off:
                     took_off = self._takeoff_proxy(0.1, 0, 0, 0,
                                                    altitude).success
+                if (self.rel_alt > (altitude / 2.)) and (np.mean(
+                        np.diff(self._rel_alt)) <= 0.08):
+                    break
+                if self.low_battery:
+                    rospy.logwarn('Battery is below minimum voltage!')
+                    break
                 self._rate.sleep()
         if (rospy.Time.now() - start) > duration:
             took_off = self.OUT_OF_DURATION
@@ -463,11 +484,10 @@ class ActionExecutor(object):
                 self.current_mode = 'RTL'
                 break
             self._rate.sleep()
-        # rtl_set = False
         while (rospy.Time.now() - start <
                duration) and not (rospy.is_shutdown()) and (
                    not self.external_intervened) and (not self.landed):
-            cond = monitor_home and self.home_moved
+            cond = monitor_home and self.home_moved and (self.rel_alt < 10.)
             if cond or (not rtl_set and not emergency_landing):
                 emergency_landing = self.emergency_landing()
             self._rate.sleep()
