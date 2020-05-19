@@ -179,6 +179,14 @@ class PlannerInterface(object):
             uav.previous_mode = uav.current_mode
             uav.current_mode = uav.state.mode
             uav.external_intervened = False
+            uav._cancel_action = False
+
+    def cancel_plan(self):
+        """
+        Function to cancel current plan
+        """
+        for uav in self.uavs:
+            uav._cancel_action = True
 
     def update_instances(self, ins_types, ins_names, update_types):
         """

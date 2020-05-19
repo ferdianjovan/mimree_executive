@@ -184,12 +184,20 @@ class PlannerInterface(object):
 
     def resume_plan(self):
         """
-        Function to flag down human intervention
+        Function to resume ongoing plan
         """
         for asv in self.asvs:
             asv.previous_mode = asv.current_mode
             asv.current_mode = asv.state.mode
             asv.external_intervened = False
+            asv._cancel_action = False
+
+    def cancel_plan(self):
+        """
+        Function to cancel current plan
+        """
+        for asv in self.asvs:
+            asv._cancel_action = True
 
     def update_instances(self, ins_types, ins_names, update_types):
         """

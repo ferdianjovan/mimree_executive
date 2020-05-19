@@ -15,7 +15,7 @@ from std_msgs.msg import Float64, Header
 class ActionExecutor(object):
 
     INIT_FUEL = 100.0
-    MINIMUM_FUEL = 75.0
+    MINIMUM_FUEL = 25.0
     EXTERNAL_INTERVENTION = -2
     OUT_OF_DURATION = -1
     ACTION_SUCCESS = 1
@@ -30,6 +30,7 @@ class ActionExecutor(object):
         self.current_mode = ''
         self.previous_mode = ''
         self.namespace = namespace
+        self._cancel_action = False
         self.external_intervened = False
         self.state = State()
         self.waypoints = list()
@@ -241,7 +242,7 @@ class ActionExecutor(object):
         """
         mode_status_check = (self.current_mode != '') and (
             self.state.mode not in [self.current_mode, self.previous_mode])
-        self.external_intervened = mode_status_check
+        self.external_intervened = mode_status_check or self._cancel_action
 
     def add_waypoints(self, index=0):
         """
@@ -317,7 +318,7 @@ class ActionExecutor(object):
                     self.previous_mode = self.current_mode
                     self.current_mode = mode.upper()
                 self._rate.sleep()
-            rospy.loginfo('Changing mode to %s ...' % mode.upper())
+            rospy.loginfo('ASV changes its mode to %s ...' % mode.upper())
         else:
             self.previous_mode = self.current_mode
             self.current_mode = mode.upper()

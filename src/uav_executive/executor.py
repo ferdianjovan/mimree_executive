@@ -34,6 +34,7 @@ class ActionExecutor(object):
         self.wp_reached = -1
         self.previous_mode = ''
         self.current_mode = ''
+        self._cancel_action = False
         self.external_intervened = False
         self.state = State()
         self.waypoints = list()
@@ -163,10 +164,11 @@ class ActionExecutor(object):
         Home position callback
         """
         if self.home.header != Header():
-            lat_change = abs(self.home.geo.latitude - msg.geo.latitude) > 5e-06
-            long_change = abs(self.home.geo.longitude -
-                              msg.geo.longitude) > 5e-06
-            self.home_moved = lat_change or long_change
+            prev_home = np.array(
+                [self.home.geo.latitude, self.home.geo.longitude])
+            current_home = np.array([msg.geo.latitude, msg.geo.longitude])
+            if np.linalg.norm(prev_home - current_home) > 1e-06:
+                self.home_moved = True
         self.home = msg
 
     def _relative_alt_cb(self, msg):
@@ -227,7 +229,7 @@ class ActionExecutor(object):
             self.state.mode not in [self.current_mode, self.previous_mode])
         # stabilize_on_land_check = (
         #     self.state.mode == 'STABILIZE') and self.landed
-        self.external_intervened = mode_status_check
+        self.external_intervened = mode_status_check or self._cancel_action
         # and (not stabilize_on_land_check)
 
     def update_landing_status(self, event):
@@ -307,7 +309,7 @@ class ActionExecutor(object):
                     self.previous_mode = self.current_mode
                     self.current_mode = mode.upper()
                 self._rate.sleep()
-            rospy.loginfo('Changing mode to %s ...' % mode.upper())
+            rospy.loginfo('UAV changes its mode to %s ...' % mode.upper())
         else:
             self.previous_mode = self.current_mode
             self.current_mode = mode.upper()
@@ -507,18 +509,23 @@ class ActionExecutor(object):
         """
         # Clear current wps available
         if not self._clear_wp_proxy().success:
-            return
+            if self.state.mode != 'GUIDED':
+                self.guided_mode(10 * self._rate.sleep_dur)
+            return False
         # wps[0] must be home waypoint
         home_wp = Waypoint(Waypoint.FRAME_GLOBAL_REL_ALT, 21, False, False,
                            1.0, 1., 0, 0, self.home.geo.latitude,
                            self.home.geo.longitude, 0.)
-        wps = [home_wp, home_wp]
+        wp = Waypoint(Waypoint.FRAME_GLOBAL_REL_ALT, 16, False, False, 1.0,
+                      0.3, 0, 0., self.home.geo.latitude,
+                      self.home.geo.longitude, 1.0)
+        wps = [home_wp, wp, home_wp]
         self.waypoints = wps
         # Push waypoints to mavros service
         if self._add_wp_proxy(0, wps).success:
             self.home_moved = False
             # assume that set_current_wp_proxy sets wp to 1
-            self.full_mission_auto(1, rospy.Duration(1, 0))
+            self.full_mission_auto(1, 10 * self._rate.sleep_dur)
         return True
 
     def reboot_autopilot_computer(self, duration=rospy.Duration(60, 0)):

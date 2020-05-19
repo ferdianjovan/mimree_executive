@@ -75,6 +75,16 @@ class MissionExec(object):
         rospy.Timer(self._rate.sleep_dur, self.execute, oneshot=True)
         return list()
 
+    def cancel_plan(self):
+        """
+        Function to cancel all plan across assets
+        """
+        self._cancel_plan_proxy()
+        if self.uav_exec is not None:
+            self.uav_exec.cancel_plan()
+        if self.asv_exec is not None:
+            self.asv_exec.cancel_plan()
+
     def inspection_mission(self, full=False):
         """
         Inspection mission
@@ -96,31 +106,34 @@ class MissionExec(object):
         """
         replan = False
         if self.uav_exec is not None and True in self.uav_exec.lowbat.values():
-            self._cancel_plan_proxy()
             self.uav_exec.low_battery_return_mission(all_return=False)
             self.uav_exec.low_battery_mission = True
             replan = True
         if self.asv_exec is not None and True in self.asv_exec.lowfuel.values(
         ):
-            self._cancel_plan_proxy()
             if self.uav_exec is not None and self.asv_exec.lowfuel[
                     self.asv_exec.uav_carrier]:
                 self.uav_exec.low_battery_return_mission(all_return=True)
             self.asv_exec.low_fuel_return_mission()
-            self.asv_exec.lowfuel_mission = True
+            self.asv_exec.low_fuel_mission = True
             replan = True
         if replan:
+            self.cancel_plan()
             rospy.sleep(4 * self._rate.sleep_dur)
             achieved = self.execute()
             if self.uav_exec is not None:
                 self.uav_exec.low_battery_mission = not achieved
             if self.asv_exec is not None:
-                self.asv_exec.lowfuel_mission = not achieved
+                self.asv_exec.low_fuel_mission = not achieved
 
     def execute(self, event=True):
         """
         Execute plan using ROSPlan
         """
+        if self.uav_exec is not None:
+            self.uav_exec.resume_plan()
+        if self.asv_exec is not None:
+            self.asv_exec.resume_plan()
         rospy.loginfo('Generating mission plan ...')
         self._problem_proxy()
         self._rate.sleep()
