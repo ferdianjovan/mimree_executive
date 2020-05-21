@@ -86,7 +86,7 @@ class PlannerInterface(object):
             rospy.logerr('ASV initial state can\'t be set!')
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.fact_update)
-        rospy.Timer(50 * self._rate.sleep_dur, self.function_update)
+        rospy.Timer(10 * self._rate.sleep_dur, self.function_update)
         rospy.sleep(50 * self._rate.sleep_dur)
 
     def low_fuel_return_mission(self):
@@ -300,7 +300,7 @@ class PlannerInterface(object):
             ['minimum-fuel'
              for _ in self.asvs], [[KeyValue('v', asv.namespace)]
                                    for asv in self.asvs],
-            [ActionExecutor.MINIMUM_FUEL for _ in self.asvs],
+            [ActionExecutor.MINIMUM_FUEL - 15. for _ in self.asvs],
             [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE for _ in self.asvs])
         # add initial fuel-percentage condition
         succeed = succeed and self.update_functions(
@@ -545,11 +545,8 @@ class PlannerInterface(object):
         for asv in self.asvs:
             # fuel status update
             self.update_functions(
-                ['fuel-percentage', 'minimum-fuel'],
-                [[KeyValue('v', asv.namespace)],
-                 [KeyValue('v', asv.namespace)]],
-                [asv.fuel, asv.MINIMUM_FUEL - 15.], [
+                ['fuel-percentage'], [[KeyValue('v', asv.namespace)]],
+                [asv.fuel], [
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
-                    KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
                 ])
             self.lowfuel[asv.namespace] = asv.low_fuel

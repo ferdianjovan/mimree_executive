@@ -210,7 +210,7 @@ class ActionExecutor(object):
             landpad = np.array([landpad_lat, landpad_long])
             if np.linalg.norm(home_wp - landpad) > 1e-06:
                 self._uav_home_proxies[uav](False, landpad_lat, landpad_long,
-                                            0.)
+                                            2.1)
 
     def update_wp_position(self, event):
         """

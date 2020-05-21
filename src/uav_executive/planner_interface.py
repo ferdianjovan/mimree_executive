@@ -82,7 +82,7 @@ class PlannerInterface(object):
             rospy.logerr('UAV initial state can\'t be set!')
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.fact_update)
-        rospy.Timer(50 * self._rate.sleep_dur, self.function_update)
+        rospy.Timer(10 * self._rate.sleep_dur, self.function_update)
         rospy.sleep(50 * self._rate.sleep_dur)
 
     def get_takeoff_wps(self, waypoints):
@@ -301,7 +301,7 @@ class PlannerInterface(object):
             ['minimum-battery'
              for _ in self.uavs], [[KeyValue('v', uav.namespace)]
                                    for uav in self.uavs],
-            [ActionExecutor.MINIMUM_VOLTAGE for _ in self.uavs],
+            [ActionExecutor.MINIMUM_VOLTAGE - 0.15 for _ in self.uavs],
             [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE for _ in self.uavs])
         # add initial battery-amount condition
         succeed = succeed and self.update_functions(
@@ -339,7 +339,8 @@ class PlannerInterface(object):
             # add minimum-battery condition
             succeed = self.update_functions(
                 ['minimum-battery'], [[KeyValue('v', uav.namespace)]],
-                [min_batt], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
+                [min_batt - 0.15],
+                [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             resp = ActionExecutor.ACTION_SUCCESS if (
                 succeed and self._preflightcheck(preflightcheck)
             ) else ActionExecutor.ACTION_FAIL
@@ -461,7 +462,7 @@ class PlannerInterface(object):
             elif msg.name == 'uav_guide':
                 self._action(msg, uav.guided_mode, [duration])
             elif msg.name == 'uav_request_arm':
-                self._action(msg, uav.request_arm, [duration])
+                self._action(msg, uav.request_arm, [False, duration])
             elif msg.name == 'uav_takeoff':
                 self._action(
                     msg, uav.takeoff,
@@ -630,11 +631,8 @@ class PlannerInterface(object):
         for uav in self.uavs:
             # battery status update
             self.update_functions(
-                ['battery-amount', 'minimum-battery'],
-                [[KeyValue('v', uav.namespace)],
-                 [KeyValue('v', uav.namespace)]],
-                [np.mean(uav.battery_voltages), uav.MINIMUM_VOLTAGE - 0.15], [
+                ['battery-amount'], [[KeyValue('v', uav.namespace)]],
+                [np.mean(uav.battery_voltages)], [
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
-                    KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
                 ])
             self.lowbat[uav.namespace] = uav.low_battery

@@ -10,7 +10,7 @@ from mavros_msgs.msg import (HomePosition, State, StatusText, Waypoint,
 from mavros_msgs.srv import (CommandBool, CommandHome, CommandLong, CommandTOL,
                              SetMode, WaypointClear, WaypointPush,
                              WaypointSetCurrent)
-from sensor_msgs.msg import BatteryState, NavSatFix
+from sensor_msgs.msg import BatteryState, NavSatFix, Range
 from std_msgs.msg import Float64, Header
 
 
@@ -31,6 +31,7 @@ class ActionExecutor(object):
         self.landed = True
         self.home_moved = False
         self.rel_alt = 0.
+        self.rangefinder = -1.
         self.wp_reached = -1
         self.previous_mode = ''
         self.current_mode = ''
@@ -46,6 +47,8 @@ class ActionExecutor(object):
         self._current_wp = -1
         self._rel_alt = [0. for _ in range(20)]
         self._rel_alt_seq = 0
+        self._rangefinder = [-1. for _ in range(20)]
+        self._min_range = -1.
         self._status_text = ''
         self._arm_status = [False for _ in range(5)]
 
@@ -127,6 +130,10 @@ class ActionExecutor(object):
                          StatusText,
                          self._status_text_cb,
                          queue_size=10)
+        rospy.Subscriber('/%s/mavros/rangefinder/rangefinder' % self.namespace,
+                         Range,
+                         self._rangefinder_cb,
+                         queue_size=10)
 
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.update_landing_status)
@@ -136,6 +143,15 @@ class ActionExecutor(object):
         # Adding initial waypoints' configuration
         while not self.add_waypoints():
             self._rate.sleep()
+
+    def _rangefinder_cb(self, msg):
+        """
+        Rangefinder call back
+        """
+        self._rangefinder[msg.header.seq % 20] = msg.range
+        self.rangefinder = np.mean(self._rangefinder)
+        if (self._min_range == -1) and (-1. not in self._rangefinder):
+            self._min_range = np.mean(self._rangefinder)
 
     def _status_text_cb(self, msg):
         """
@@ -167,9 +183,13 @@ class ActionExecutor(object):
             prev_home = np.array(
                 [self.home.geo.latitude, self.home.geo.longitude])
             current_home = np.array([msg.geo.latitude, msg.geo.longitude])
-            if np.linalg.norm(prev_home - current_home) > 1e-06:
+            if np.linalg.norm(prev_home - current_home) > 3e-06:
                 self.home_moved = True
-        self.home = msg
+                self.home = msg
+            else:
+                self.home_moved = False
+        else:
+            self.home = msg
 
     def _relative_alt_cb(self, msg):
         """
@@ -236,7 +256,10 @@ class ActionExecutor(object):
         """
         Automated update landing (or flying) status
         """
-        if self._status_text == 'PreArm: Gyros not calibrated':
+        if self._min_range > -1.:
+            self.landed = (self.rangefinder <= (1.5 * self._min_range)) and (
+                self.rangefinder >= (0.5 * self._min_range))
+        elif self._status_text == 'PreArm: Gyros not calibrated':
             self.landed = (False in self._arm_status)
         else:
             self.landed = (not self.state.armed) or (self.rel_alt <= 0.1)
@@ -280,7 +303,7 @@ class ActionExecutor(object):
         if response.success:
             rospy.loginfo('Setting current target waypoint to %d' % wp_index)
         else:
-            rospy.logwarn('Waypoint %d can\' be set!' % wp_index)
+            rospy.logwarn('Waypoint %d can\'t be set!' % wp_index)
         return response.success
 
     def set_current_location_as_home(self):
@@ -417,24 +440,30 @@ class ActionExecutor(object):
             response = self.EXTERNAL_INTERVENTION
         return response
 
-    def request_arm(self, duration=rospy.Duration(60, 0)):
+    def request_arm(self, disarm=False, duration=rospy.Duration(60, 0)):
         """
         Request for arming UAV
         """
         start = rospy.Time.now()
-        rospy.loginfo('Waiting for the UAV to be ARMED ...')
-        while (rospy.Time.now() - start <
-               duration) and not (rospy.is_shutdown()) and (
-                   not self.external_intervened) and not self.state.armed:
+        if not disarm:
+            rospy.loginfo('Waiting for the UAV to be ARMED ...')
+        else:
+            rospy.loginfo('Waiting for the UAV to be DISARMED ...')
+        while (rospy.Time.now() - start < duration) and not (
+                rospy.is_shutdown()) and (not self.external_intervened) and (
+                    not (disarm ^ self.state.armed)):
             self._rate.sleep()
-        response = int(self.state.armed)
+        response = int(self.state.armed ^ disarm)
         if (rospy.Time.now() - start) > duration:
             response = self.OUT_OF_DURATION
         elif self.external_intervened:
             response = self.EXTERNAL_INTERVENTION
         return response
 
-    def full_mission_auto(self, waypoint, duration=rospy.Duration(60, 0)):
+    def full_mission_auto(self,
+                          waypoint,
+                          duration=rospy.Duration(60, 0),
+                          low_battery_trip=False):
         """
         Go from waypoint i to the last
         """
@@ -456,7 +485,7 @@ class ActionExecutor(object):
                 self.current_mode = 'AUTO' if auto else self.current_mode
             if self.wp_reached != -1 and self.wp_reached not in wps_reached:
                 wps_reached.append(self.wp_reached)
-            if self.low_battery:
+            if not low_battery_trip and self.low_battery:
                 rospy.logwarn('Battery is below minimum voltage!')
                 break
             self._rate.sleep()
@@ -473,60 +502,81 @@ class ActionExecutor(object):
         """
         Return to home action
         """
-        rtl_set = False
-        emergency_landing = False
         start = rospy.Time.now()
-        for i in range(3):
-            if self.external_intervened:
-                break
-            rtl_set = self._set_mode_proxy(0, 'rtl').mode_sent
-            if rtl_set:
-                rospy.loginfo('Setting mode to RTL ...')
-                self.previous_mode = self.current_mode
-                self.current_mode = 'RTL'
-                break
-            self._rate.sleep()
+        if self._set_mode_proxy(0, 'rtl').mode_sent:
+            rospy.loginfo('Setting mode to RTL ...')
+            self.previous_mode = self.current_mode
+            self.current_mode = 'RTL'
         while (rospy.Time.now() - start <
                duration) and not (rospy.is_shutdown()) and (
                    not self.external_intervened) and (not self.landed):
             cond = monitor_home and self.home_moved and (self.rel_alt < 10.)
-            if cond or (not rtl_set and not emergency_landing):
-                emergency_landing = self.emergency_landing()
+            if cond or self.current_mode != 'RTL':
+                duration = duration - (rospy.Time.now() - start)
+                start = rospy.Time.now()
+                self.emergency_landing(duration)
             self._rate.sleep()
-        rtl_set = (self.landed and
-                   (rtl_set or (emergency_landing and self.wp_reached == 1)))
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        disarm = self.request_arm(True, duration)
+        landed = int(self.landed and disarm == self.ACTION_SUCCESS)
         if (rospy.Time.now() - start) > duration:
-            rtl_set = self.OUT_OF_DURATION
+            landed = self.OUT_OF_DURATION
         if self.external_intervened:
-            rtl_set = self.EXTERNAL_INTERVENTION
-        if emergency_landing:
-            self.add_waypoints()
-        return int(rtl_set)
+            landed = self.EXTERNAL_INTERVENTION
+        return landed
 
-    def emergency_landing(self):
+    def emergency_landing(self, duration=rospy.Duration(600, 0)):
         """
         Emergency land to home when home wobbles
         """
-        # Clear current wps available
-        if not self._clear_wp_proxy().success:
-            if self.state.mode != 'GUIDED':
-                self.guided_mode(10 * self._rate.sleep_dur)
-            return False
-        # wps[0] must be home waypoint
-        home_wp = Waypoint(Waypoint.FRAME_GLOBAL_REL_ALT, 21, False, False,
-                           1.0, 1., 0, 0, self.home.geo.latitude,
-                           self.home.geo.longitude, 0.)
-        wp = Waypoint(Waypoint.FRAME_GLOBAL_REL_ALT, 16, False, False, 1.0,
-                      0.3, 0, 0., self.home.geo.latitude,
-                      self.home.geo.longitude, 1.0)
-        wps = [home_wp, wp, home_wp]
-        self.waypoints = wps
-        # Push waypoints to mavros service
-        if self._add_wp_proxy(0, wps).success:
-            self.home_moved = False
-            # assume that set_current_wp_proxy sets wp to 1
-            self.full_mission_auto(1, 10 * self._rate.sleep_dur)
-        return True
+        start = rospy.Time.now()
+        landed = 0
+        while (rospy.Time.now() - start <
+               duration) and not (rospy.is_shutdown()) and (
+                   not self.external_intervened) and (not self.landed):
+            if landed == self.ACTION_SUCCESS:
+                self._rate.sleep()
+                continue
+            cur_pos = np.array([
+                self.global_pose.latitude,
+                self.global_pose.longitude,
+            ])
+            home_pos = np.array(
+                [self.home.geo.latitude, self.home.geo.longitude])
+            altitude = 0.9
+            if np.linalg.norm(cur_pos - home_pos) < 3e-6 and (self.rel_alt <=
+                                                              altitude):
+                landed = self.guided_mode(50 * self._rate.sleep_dur,
+                                          mode='land')
+            else:
+                if not self._clear_wp_proxy().success:
+                    if self.current_mode != 'GUIDED':
+                        self.guided_mode(10 * self._rate.sleep_dur)
+                    continue
+                # wps[0] must be home waypoint
+                home_wp = Waypoint(Waypoint.FRAME_GLOBAL_REL_ALT, 21, False,
+                                   False, 1.0, 1., 0, 0,
+                                   self.home.geo.latitude,
+                                   self.home.geo.longitude, 0.)
+                wp = Waypoint(Waypoint.FRAME_GLOBAL_REL_ALT, 16, False, False,
+                              0.1, 0.3, 0, 0., self.home.geo.latitude,
+                              self.home.geo.longitude, altitude / 3.)
+                wps = [home_wp, wp]
+                self.waypoints = wps
+                # Push waypoints to mavros service
+                if self._add_wp_proxy(0, wps).success:
+                    self.goto(1, 50 * self._rate.sleep_dur, True)
+            self._rate.sleep()
+        landed = int(self.landed)
+        if bool(landed):
+            self.add_waypoints()
+        self.guided_mode(10 * self._rate.sleep_dur)
+        if (rospy.Time.now() - start) > duration:
+            landed = self.OUT_OF_DURATION
+        if self.external_intervened:
+            landed = self.EXTERNAL_INTERVENTION
+        return landed
 
     def reboot_autopilot_computer(self, duration=rospy.Duration(60, 0)):
         """

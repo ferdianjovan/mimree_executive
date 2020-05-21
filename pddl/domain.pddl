@@ -87,7 +87,7 @@
 
     (:durative-action asv_rtl
         :parameters (?v - asv ?from ?to - asv_waypoint)
-        :duration (= ?duration 420)
+        :duration (= ?duration 540)
         :condition (and
             (at start (at ?v ?from))
             (over all (home ?to))
@@ -104,7 +104,7 @@
 
     (:durative-action asv_rtl_with_uav
         :parameters (?boat - asv ?drone - uav ?from ?to - asv_waypoint)
-        :duration (= ?duration 420)
+        :duration (= ?duration 540)
         :condition (and
             (at start (at ?boat ?from))
             (at start (at ?drone ?from))
@@ -126,7 +126,7 @@
 
     (:durative-action asv_lowfuel_return
         :parameters (?v - asv ?from ?to - asv_waypoint)
-        :duration (= ?duration 420)
+        :duration (= ?duration 540)
         :condition (and
             (over all (home ?to))
             (over all (armed ?v))
@@ -141,7 +141,7 @@
 
     (:durative-action asv_lowfuel_return_with_uav
         :parameters (?boat - asv ?drone - uav ?from ?to - asv_waypoint)
-        :duration (= ?duration 420)
+        :duration (= ?duration 540)
         :condition (and
             (over all (landed ?drone))
             (over all (home ?to))
@@ -233,7 +233,7 @@
 
     (:durative-action uav_rtl
         :parameters (?v - uav ?from ?to - uav_waypoint)
-        :duration (= ?duration 420)
+        :duration (= ?duration 540)
         :condition (and
             (at start (airborne ?v))
             (at start (at ?v ?from))
@@ -254,7 +254,7 @@
 
     (:durative-action uav_lowbat_return
         :parameters (?v - uav ?from ?to - uav_waypoint)
-        :duration (= ?duration 420)
+        :duration (= ?duration 540)
         :condition (and
             (over all (= ?from ?to))
             (over all (home ?from))
