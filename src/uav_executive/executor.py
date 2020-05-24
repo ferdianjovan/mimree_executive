@@ -431,9 +431,9 @@ class ActionExecutor(object):
             self._rate.sleep()
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
+        response = int(waypoint == self.wp_reached)
         if not (self.low_battery or self.external_intervened):
             self.guided_mode(duration=duration)
-        response = int(waypoint == self.wp_reached)
         if (rospy.Time.now() - start) > duration:
             response = self.OUT_OF_DURATION
         elif self.external_intervened:
@@ -547,6 +547,9 @@ class ActionExecutor(object):
             altitude = 0.9
             if np.linalg.norm(cur_pos - home_pos) < 3e-6 and (self.rel_alt <=
                                                               altitude):
+                if self._min_range > -1 and np.abs(
+                        np.max(np.diff(self._rangefinder[-5:]))) > 1.:
+                    continue
                 landed = self.guided_mode(50 * self._rate.sleep_dur,
                                           mode='land')
             else:

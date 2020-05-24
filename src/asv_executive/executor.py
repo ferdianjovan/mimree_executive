@@ -379,9 +379,9 @@ class ActionExecutor(object):
             self._rate.sleep()
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
+        response = int(waypoint == self.wp_reached)
         if not (self.low_fuel or self.external_intervened):
             self.guided_mode(duration=duration)
-        response = int(waypoint == self.wp_reached)
         if (rospy.Time.now() - start) > duration:
             response = self.OUT_OF_DURATION
         elif self.external_intervened:
