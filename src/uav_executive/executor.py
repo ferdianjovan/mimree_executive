@@ -130,7 +130,8 @@ class ActionExecutor(object):
                          StatusText,
                          self._status_text_cb,
                          queue_size=10)
-        rospy.Subscriber('/%s/mavros/rangefinder/rangefinder' % self.namespace,
+        rospy.Subscriber('/%s/mavros/distance_sensor/rangefinder_sub' %
+                         self.namespace,
                          Range,
                          self._rangefinder_cb,
                          queue_size=10)
@@ -257,8 +258,7 @@ class ActionExecutor(object):
         Automated update landing (or flying) status
         """
         if self._min_range > -1.:
-            self.landed = (self.rangefinder <= (1.5 * self._min_range)) and (
-                self.rangefinder >= (0.5 * self._min_range))
+            self.landed = (self.rangefinder <= (self._min_range + 0.1))
         elif self._status_text == 'PreArm: Gyros not calibrated':
             self.landed = (False in self._arm_status)
         else:
