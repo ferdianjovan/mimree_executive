@@ -7,7 +7,8 @@ import argparse
 import rospy
 import roslib
 from std_srvs.srv import Empty
-from rosplan_dispatch_msgs.srv import DispatchService
+from rosplan_dispatch_msgs.srv import (DispatchService,
+                                       DispatchServiceResponse)
 from uav_executive.planner_interface import PlannerInterface as PIUAV
 from asv_executive.planner_interface import PlannerInterface as PIASV
 
@@ -51,6 +52,8 @@ class MissionExec(object):
         # Service
         rospy.Service('%s/resume_plan' % rospy.get_name(), Empty,
                       self.resume_plan)
+        rospy.Service('%s/return_home' % rospy.get_name(), Empty,
+                      self.return_home_mission)
         # Auto call functions
         rospy.Timer(50 * self._rate.sleep_dur, self.low_battery_replan)
 
@@ -100,6 +103,27 @@ class MissionExec(object):
             self.asv_exec.inspection_mission()
             self.execute()
 
+    def return_home_mission(self, req):
+        """
+        Mission to return home
+        """
+        if self.uav_exec is not None:
+            self.uav_exec.low_battery_return_mission(all_return=False)
+            self.uav_exec.low_battery_mission = True
+        if self.asv_exec is not None:
+            if self.uav_exec is not None:
+                self.uav_exec.low_battery_return_mission(all_return=True)
+            self.asv_exec.low_fuel_return_mission()
+            self.asv_exec.low_fuel_mission = True
+        self.cancel_plan()
+        rospy.sleep(4 * self._rate.sleep_dur)
+        achieved = self.execute()
+        if self.uav_exec is not None:
+            self.uav_exec.low_battery_mission = not achieved
+        if self.asv_exec is not None:
+            self.asv_exec.low_fuel_mission = not achieved
+        return list()
+
     def low_battery_replan(self, event=True):
         """
         Assets return home due to low battery voltage
@@ -134,16 +158,22 @@ class MissionExec(object):
             self.uav_exec.resume_plan()
         if self.asv_exec is not None:
             self.asv_exec.resume_plan()
-        rospy.loginfo('Generating mission plan ...')
-        self._problem_proxy()
-        self._rate.sleep()
-        rospy.loginfo('Planning ...')
-        self._planner_proxy()
-        self._rate.sleep()
-        rospy.loginfo('Execute mission plan ...')
-        self._parser_proxy()
-        self._rate.sleep()
-        response = self._dispatch_proxy()
+        response = DispatchServiceResponse()
+        for _ in range(3):
+            try:
+                rospy.loginfo('Generating mission plan ...')
+                self._problem_proxy()
+                self._rate.sleep()
+                rospy.loginfo('Planning ...')
+                self._planner_proxy()
+                self._rate.sleep()
+                rospy.loginfo('Execute mission plan ...')
+                self._parser_proxy()
+                self._rate.sleep()
+                response = self._dispatch_proxy()
+                break
+            except rospy.service.ServiceException:
+                continue
         if response.goal_achieved:
             rospy.loginfo('Mission Succeed')
         else:

@@ -47,7 +47,7 @@ class ActionExecutor(object):
         self._current_wp = -1
         self._rel_alt = [0. for _ in range(20)]
         self._rel_alt_seq = 0
-        self._rangefinder = [-1. for _ in range(20)]
+        self._rangefinder = [-1. for _ in range(30)]
         self._min_range = -1.
         self._status_text = ''
         self._arm_status = [False for _ in range(5)]
@@ -149,7 +149,7 @@ class ActionExecutor(object):
         """
         Rangefinder call back
         """
-        self._rangefinder[msg.header.seq % 20] = msg.range
+        self._rangefinder[msg.header.seq % len(self._rangefinder)] = msg.range
         self.rangefinder = np.mean(self._rangefinder)
         if (self._min_range == -1) and (-1. not in self._rangefinder):
             self._min_range = np.mean(self._rangefinder)
@@ -544,7 +544,7 @@ class ActionExecutor(object):
             ])
             home_pos = np.array(
                 [self.home.geo.latitude, self.home.geo.longitude])
-            altitude = 0.9
+            altitude = 1.0
             if np.linalg.norm(cur_pos - home_pos) < 3e-6 and (self.rel_alt <=
                                                               altitude):
                 if self._min_range > -1 and np.abs(
@@ -564,7 +564,7 @@ class ActionExecutor(object):
                                    self.home.geo.longitude, 0.)
                 wp = Waypoint(Waypoint.FRAME_GLOBAL_REL_ALT, 16, False, False,
                               0.1, 0.3, 0, 0., self.home.geo.latitude,
-                              self.home.geo.longitude, altitude / 3.)
+                              self.home.geo.longitude, altitude / 2.)
                 wps = [home_wp, wp]
                 self.waypoints = wps
                 # Push waypoints to mavros service

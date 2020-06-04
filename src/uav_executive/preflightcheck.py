@@ -90,14 +90,13 @@ class PreFlightCheck(object):
         second_col_frame = LabelFrame(upper_frame, text='', padx=2, pady=2)
         second_col_frame.pack(side=LEFT)
         self._uav_entry = StringVar()
-        self._uav_entry.set('HECTOR')
+        self._uav_entry.set(self.uav.namespace.upper())
         Entry(second_col_frame,
               width=20,
               state='disabled',
               textvariable=self._uav_entry).pack(side=TOP)
         self._date_entry = StringVar()
-        self._date_entry.set(
-            datetime.fromtimestamp(rospy.Time.now().secs).date())
+        self._date_entry.set(datetime.now().date())
         Entry(second_col_frame,
               width=20,
               state='disabled',

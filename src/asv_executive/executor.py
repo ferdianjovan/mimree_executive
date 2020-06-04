@@ -5,7 +5,8 @@ import numpy as np
 # ROS packages
 import rospy
 # MAVROS packages
-from mavros_msgs.msg import HomePosition, State, Waypoint, WaypointReached
+from mavros_msgs.msg import (HomePosition, State, StatusText, Waypoint,
+                             WaypointReached)
 from mavros_msgs.srv import (CommandBool, CommandHome, SetMode, WaypointClear,
                              WaypointPush, WaypointSetCurrent)
 from sensor_msgs.msg import BatteryState, NavSatFix
@@ -41,6 +42,7 @@ class ActionExecutor(object):
         self.low_fuel = False
         self._waypoints = waypoints
         self._current_wp = -1
+        self._status_text = ''
         self._rate = rospy.Rate(update_frequency)
 
         # Service proxies
@@ -124,6 +126,10 @@ class ActionExecutor(object):
                          WaypointReached,
                          self._wp_reached_cb,
                          queue_size=10)
+        rospy.Subscriber('/%s/mavros/statustext/recv' % self.namespace,
+                         StatusText,
+                         self._status_text_cb,
+                         queue_size=10)
 
         # Auto call functions
         rospy.Timer(10 * self._rate.sleep_dur, self.intervene_observer)
@@ -134,6 +140,15 @@ class ActionExecutor(object):
         # Adding initial waypoints' configuration
         while not self.add_waypoints():
             self._rate.sleep()
+
+    def _status_text_cb(self, msg):
+        """
+        Status text call back
+        """
+        if msg.text == 'Reached destination':
+            self._status_text = msg.text
+        else:
+            self._status_text = ''
 
     def _heading_cb(self, msg):
         """
@@ -406,8 +421,11 @@ class ActionExecutor(object):
                 if rtl_set:
                     self.previous_mode = self.current_mode
                     self.current_mode = 'RTL'
+            if self._status_text == 'Reached destination':
+                break
             self._rate.sleep()
-        rtl_set = (self._current_wp == 0 and rtl_set)
+        rtl_set = (((self._current_wp == 0) or
+                    (self._status_text == 'Reached destination')) and rtl_set)
         if (rospy.Time.now() - start) > duration:
             rtl_set = self.OUT_OF_DURATION
         if self.external_intervened:
