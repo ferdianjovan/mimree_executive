@@ -1,15 +1,15 @@
 #!/usr/bin/env python
 
-# Other 3rd party packages
 import numpy as np
-# ROS packages
 import rospy
-# MAVROS packages
+import tf
+from geographic_msgs.msg import GeoPoseStamped
 from mavros_msgs.msg import (HomePosition, State, StatusText, Waypoint,
                              WaypointReached)
 from mavros_msgs.srv import (CommandBool, CommandHome, CommandLong, CommandTOL,
                              SetMode, WaypointClear, WaypointPush,
                              WaypointSetCurrent)
+from nav_msgs.msg import Odometry
 from sensor_msgs.msg import BatteryState, NavSatFix, Range
 from std_msgs.msg import Float64, Header
 
@@ -41,12 +41,12 @@ class ActionExecutor(object):
         self.waypoints = list()
         self.home = HomePosition()
         self.global_pose = NavSatFix()
+        self.odometry = Odometry()
         self.battery_voltages = [self.INIT_VOLTAGE for _ in range(100)]
         self.low_battery = False
         self._waypoints = waypoints
         self._current_wp = -1
         self._rel_alt = [0. for _ in range(20)]
-        self._rel_alt_seq = 0
         self._rangefinder = [-1. for _ in range(30)]
         self._min_range = -1.
         self._status_text = ''
@@ -97,6 +97,12 @@ class ActionExecutor(object):
 
         self._rate = rospy.Rate(update_frequency)
 
+        # Publisher
+        self._setpoint_pub = rospy.Publisher(
+            '/%s/mavros/setpoint_position/global' % self.namespace,
+            GeoPoseStamped,
+            queue_size=10)
+
         # Subscribers
         rospy.Subscriber('/%s/mavros/state' % self.namespace,
                          State,
@@ -135,15 +141,25 @@ class ActionExecutor(object):
                          Range,
                          self._rangefinder_cb,
                          queue_size=10)
+        rospy.Subscriber('/%s/mavros/global_position/local' % self.namespace,
+                         Odometry,
+                         self._odometry_cb,
+                         queue_size=10)
 
         # Auto call functions
+        rospy.Timer(self._rate.sleep_dur, self.update_wp_position)
         rospy.Timer(self._rate.sleep_dur, self.update_landing_status)
         rospy.Timer(10 * self._rate.sleep_dur, self.intervene_observer)
-        rospy.Timer(self._rate.sleep_dur, self.update_wp_position)
         rospy.loginfo('Adding WPs ...')
         # Adding initial waypoints' configuration
         while not self.add_waypoints():
             self._rate.sleep()
+
+    def _odometry_cb(self, msg):
+        """
+        Odometry call back
+        """
+        self.odometry = msg
 
     def _rangefinder_cb(self, msg):
         """
@@ -196,8 +212,8 @@ class ActionExecutor(object):
         """
         Relative altitude callback
         """
-        self._rel_alt[self._rel_alt_seq % 20] = msg.data
-        self._rel_alt_seq += 1
+        self._rel_alt.append(msg.data)
+        self._rel_alt = self._rel_alt[1:]
         self.rel_alt = np.mean(self._rel_alt)
 
     def _global_pose_cb(self, msg):
@@ -227,7 +243,7 @@ class ActionExecutor(object):
             ])
             alt_diff = abs(self.global_pose.altitude -
                            (self.home.geo.altitude + waypoint.z_alt))
-            if np.linalg.norm(cur_pos - temp) < 1e-5 and alt_diff < 0.2:
+            if np.linalg.norm(cur_pos - temp) < 1e-5 and alt_diff < 0.5:
                 wp = idx
                 break
         self._current_wp = wp
@@ -268,7 +284,7 @@ class ActionExecutor(object):
         """
         Setting up waypoints for the UAV
         """
-        if self.home.header == Header():
+        while self.home.header == Header() and (not rospy.is_shutdown()):
             rospy.logwarn(
                 'Home has not been set! Setting current location as home.')
             self.set_current_location_as_home()
@@ -440,6 +456,40 @@ class ActionExecutor(object):
             response = self.EXTERNAL_INTERVENTION
         return response
 
+    def goto_coordinate(self, target, duration=rospy.Duration(60, 0)):
+        """
+        Go to specific global coordinate action
+        """
+        reached = False
+        start = rospy.Time.now()
+        self.guided_mode(duration=duration)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        while (rospy.Time.now() - start <
+               duration) and not (rospy.is_shutdown()) and (
+                   not self.external_intervened) and (not reached):
+            if self.low_battery:
+                rospy.logwarn('Battery is below minimum voltage!')
+                break
+            target.header.stamp = rospy.Time.now()
+            self._setpoint_pub.publish(target)
+            temp = np.array([
+                target.pose.position.latitude, target.pose.position.longitude
+            ])
+            cur_pos = np.array([
+                self.global_pose.latitude,
+                self.global_pose.longitude,
+            ])
+            if np.linalg.norm(cur_pos - temp) < 5e-6:
+                reached = True
+            self._rate.sleep()
+        response = int(reached)
+        if (rospy.Time.now() - start) > duration:
+            response = self.OUT_OF_DURATION
+        elif self.external_intervened:
+            response = self.EXTERNAL_INTERVENTION
+        return response
+
     def request_arm(self, disarm=False, duration=rospy.Duration(60, 0)):
         """
         Request for arming UAV
@@ -600,3 +650,91 @@ class ActionExecutor(object):
         if (rospy.Time.now() - start) > duration:
             response = self.OUT_OF_DURATION
         return response
+
+    def inspect_wt(self, duration=rospy.Duration(900, 0)):
+        """
+        UAV Inspection for a WT that involves flying close and parallel
+        to each blade of a WT
+        """
+        start = rospy.Time.now()
+        # position where drone is originated in one of the wps
+        original = GeoPoseStamped()
+        original.pose.position.latitude = self.global_pose.latitude
+        original.pose.position.longitude = self.global_pose.longitude
+        original.pose.position.altitude = self.rel_alt
+        original.pose.orientation = self.odometry.pose.pose.orientation
+        relative_altitude = self.rel_alt
+        rospy.loginfo("Scan first blade...")
+        first_blade = self.blade_inspect(original, relative_altitude,
+                                         [0.000, 0.0006, 0.0000], duration)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        rospy.loginfo("Scan second blade...")
+        second_blade = self.blade_inspect(original, relative_altitude, [
+            0.000, 0.0006 * np.cos(138. / 180.0 * np.pi),
+            85.6 * np.sin(138. / 180.0 * np.pi)
+        ], duration)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        rospy.loginfo("Scan third blade...")
+        third_blade = self.blade_inspect(original, relative_altitude, [
+            0.000, 0.0006 * np.cos(234. / 180.0 * np.pi),
+            85.6 * np.sin(234. / 180.0 * np.pi)
+        ], duration)
+        rospy.loginfo("Inspection is done...")
+        return np.min([first_blade, second_blade, third_blade])
+
+    def blade_inspect(self,
+                      original,
+                      relative_altitude,
+                      target_position,
+                      duration=rospy.Duration(300, 0)):
+        """
+        Inspecting the blade given the [original] pose to return to
+        and end [target] position to scan
+        """
+        start = rospy.Time.now()
+        reached_original = self.ACTION_FAIL
+        # position where drone is supposed to be
+        quaternion = [
+            self.odometry.pose.pose.orientation.x,
+            self.odometry.pose.pose.orientation.y,
+            self.odometry.pose.pose.orientation.z,
+            self.odometry.pose.pose.orientation.w
+        ]
+        uav_orientation = tf.transformations.euler_from_quaternion(quaternion,
+                                                                   axes='sxyz')
+        latitude = self.global_pose.latitude + (
+            target_position[0] * np.sin(uav_orientation[2]) +
+            target_position[1] * np.cos(uav_orientation[2]))
+        longitude = self.global_pose.longitude + (
+            target_position[0] * np.cos(uav_orientation[2]) +
+            target_position[1] * np.sin(uav_orientation[2]))
+        altitude = self.rel_alt + target_position[2]
+        target = GeoPoseStamped()
+        target.header.seq = 1
+        target.header.stamp = rospy.Time.now()
+        target.header.frame_id = 'map'
+        target.pose.position.latitude = latitude
+        target.pose.position.longitude = longitude
+        target.pose.position.altitude = altitude
+        target.pose.orientation = self.odometry.pose.pose.orientation
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        reached_target = self.goto_coordinate(target, duration)
+        rospy.loginfo("Return to %3.5f, %3.5f position..." %
+                      (original.pose.position.latitude,
+                       original.pose.position.longitude))
+        if reached_target == self.ACTION_SUCCESS:
+            original.header.seq = 1
+            original.header.stamp = rospy.Time.now()
+            original.header.frame_id = 'map'
+            duration = duration - (rospy.Time.now() - start)
+            start = rospy.Time.now()
+            reached_original = self.goto_coordinate(original, duration)
+            if abs(self._rel_alt[-1] - relative_altitude) > 0.1:
+                original.pose.position.altitude = (
+                    original.pose.position.altitude + relative_altitude -
+                    self._rel_alt[-1])
+                reached_original = self.goto_coordinate(original, duration)
+        return np.min([reached_target, reached_original])

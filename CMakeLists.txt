@@ -9,8 +9,10 @@ find_package(catkin REQUIRED COMPONENTS
   rosplan_knowledge_msgs
   rospy
   sensor_msgs
+  nav_msgs
   std_msgs
   std_srvs
+  geographic_msgs
 )
 
 catkin_python_setup()
@@ -73,7 +75,7 @@ catkin_python_setup()
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES mimree_executive
-  CATKIN_DEPENDS diagnostic_msgs mavros_msgs roslib rosplan_dispatch_msgs rosplan_knowledge_msgs rospy sensor_msgs std_msgs std_srvs
+  CATKIN_DEPENDS diagnostic_msgs mavros_msgs roslib rosplan_dispatch_msgs rosplan_knowledge_msgs rospy sensor_msgs std_msgs std_srvs nav_msgs geographic_msgs
 #  DEPENDS system_lib
 )
 

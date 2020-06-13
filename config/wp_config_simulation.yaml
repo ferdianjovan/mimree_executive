@@ -4,11 +4,21 @@
   uav_waypoints:
 # hold_time in second, rel_alt is height above ground 
 # Please see Waypoint.msg in mavros_msgs package for other parameters
-    - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593710, rel_alt: 20.0}
-    - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593710, rel_alt: 70.0}
-    - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593710, rel_alt: 110.0}
-    - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593817, rel_alt:  80.0}
-    - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593667, rel_alt:  20.0}
+      - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593710, rel_alt: 20.0, inspect: False}
+      - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593710, rel_alt: 70.0, inspect: False}
+      - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593710, rel_alt: 110.0, inspect: True}
+      - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593817, rel_alt:  80.0, inspect: False}
+      - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593667, rel_alt:  20.0, inspect: False}
+  asvs:
+    - halcyon
+  uav_carrier: halcyon
+  asv_waypoints:
+    - {hold_time: 2.0, radius: 2.0, yaw: 0.0, lat: 43.799513, long: 28.594846, takeoff: False}
+    - {hold_time: 2.0, radius: 2.0, yaw: 0.0, lat: 43.799336, long: 28.593810, takeoff: True}
+    - {hold_time: 5.0, radius: 2.0, yaw: 0.0, lat: 43.799164, long: 28.594843, takeoff: False}
+- config: asv_mangalia
+  uavs: [] 
+  uav_waypoints: []
   asvs:
     - halcyon
   uav_carrier: halcyon
@@ -20,23 +30,9 @@
   uavs: 
     - hector
   uav_waypoints:
-# hold_time in second, rel_alt is height above ground 
-# Please see Waypoint.msg in mavros_msgs package for other parameters
-    - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593710, rel_alt: 110.0}
-    - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593637, rel_alt: 110.0}
-    - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799350, long: 28.593817, rel_alt:  80.0}
-    - {hold_time: 2.0, radius: 1.0, yaw: 0.0, lat: 43.799165, long: 28.593273, rel_alt:  50.0}
-    - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.799263, long: 28.593667, rel_alt:  20.0}
+      # need to go to right / left 0.0007 
+      - {hold_time: 2.0, radius: 1.0, yaw: 0.0, lat: 43.7993805, long: 28.5936359, rel_alt:  40.0, inspect: False}
+      - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.7993805, long: 28.5936359, rel_alt:  100.0, inspect: True}
   asvs: []
   uav_carrier: '' 
   asv_waypoints: []
-- config: asv_mangalia
-  uavs: [] 
-  uav_waypoints: []
-  asvs:
-    - halcyon
-  uav_carrier: halcyon
-  asv_waypoints:
-    - {hold_time: 2.0, radius: 2.0, yaw: 0.0, lat: 43.799513, long: 28.594846, takeoff: False}
-    - {hold_time: 2.0, radius: 2.0, yaw: 0.0, lat: 43.799336, long: 28.593810, takeoff: True}
-    - {hold_time: 5.0, radius: 2.0, yaw: 0.0, lat: 43.799164, long: 28.594843, takeoff: False}

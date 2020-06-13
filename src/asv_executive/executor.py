@@ -263,7 +263,7 @@ class ActionExecutor(object):
         """
         Setting up waypoints for the ASV
         """
-        if self.home.header == Header():
+        while self.home.header == Header() and (not rospy.is_shutdown()):
             rospy.logwarn(
                 'Home has not been set! Setting current location as home.')
             self.set_current_location_as_home()

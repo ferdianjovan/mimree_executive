@@ -22,11 +22,10 @@
         <param name="$(arg uav_name)_description" textfile="$(find mimree_description)/urdf/$(arg uav_name).urdf" />
 
         <node name="$(arg uav_name)_spawn" pkg="gazebo_ros" type="spawn_model" respawn="false" output="screen" args="-file $(arg sdf_uav_file) -sdf -x -0.0 -y -0.0 -z 7.42 -R 0. -P 0. -Y 0. -model $(arg uav_name)"/>
-
         <!-- args x y z yaw pitch roll frame_id child_id time_in_ms -->
-        <node name="$(arg uav_name)_scanningLidar_broadcaster" pkg="tf" type="static_transform_publisher" args="0.191 0 0.591936 -1.5707 1.5707 0 $(arg uav_name) $(arg uav_name)_scanningLidar 33" />
-
-        <node name="$(arg uav_name)_altLidar_broadcaster" pkg="tf" type="static_transform_publisher" args="0.151 0 0.591936 0 1.5707 0 $(arg uav_name) $(arg uav_name)_altLidar 33" />
+        <!-- <node name="$(arg uav_name)_scanningLidar_broadcaster" pkg="tf" type="static_transform_publisher" args="0.191 0 0.591936 -1.5707 1.5707 0 $(arg uav_name) $(arg uav_name)_scanningLidar 33" />
+        <node name="$(arg uav_name)_altLidar_broadcaster" pkg="tf" type="static_transform_publisher" args="0.151 0 0.591936 0 1.5707 0 $(arg uav_name) $(arg uav_name)_altLidar 33" /> -->
+        <node name="$(arg uav_name)_tf_broadcaster" pkg="mimree_description" type="mimree_tf_broadcaster.py" args="$(arg uav_name) mimree_uav" />
     </group>
 
     <group unless="$(arg repair_mission)">
@@ -39,8 +38,10 @@
         <param name="$(arg asv_name)_description" textfile="$(find mimree_description)/urdf/$(arg asv_name).urdf" />
 
         <node name="$(arg uav_name)_spawn" pkg="gazebo_ros" type="spawn_model" respawn="false" output="screen" args="-file $(arg sdf_uav_file) -sdf -x -14.0 -y -19.65 -z 2.0 -R 0. -P 0. -Y 0. -model $(arg uav_name)"/>
+        <node name="$(arg uav_name)_tf_broadcaster" pkg="mimree_description" type="mimree_tf_broadcaster.py" args="$(arg uav_name) mimree_uav" />
 
         <node name="$(arg asv_name)_spawn" pkg="gazebo_ros" type="spawn_model" respawn="false" output="screen" args="-file $(arg sdf_asv_file) -sdf -x -10.0 -y -20.0 -z 0.0 -R 0. -P 0. -Y 0. -model $(arg asv_name)"/>
+        <node name="$(arg asv_name)_altLidar_broadcaster" pkg="tf" type="static_transform_publisher" args="5.3 0.3 2.08 0 0 0 $(arg asv_name) $(arg asv_name)_altLidar 33" />
     </group>
 
 </launch>

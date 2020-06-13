@@ -133,11 +133,19 @@ class PlannerInterface(object):
         UAV mission visiting all waypoints and coming back to launch pod
         """
         # 'all waypoints must be visited' goals
-        pred_names = ['visited' for _ in self.waypoints]
+        # pred_names = ['visited' for _ in self.waypoints]
+        # params = [[KeyValue('wp', 'uav_wp%d' % (idx + 1))]
+        #           for idx, _ in enumerate(self.waypoints)]
+        # update_types = [
+        #     KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.waypoints
+        # ]
+        # 'a drone must do inspect action' goals
+        pred_names = ['inspected' for wp in self.waypoints if wp['inspect']]
         params = [[KeyValue('wp', 'uav_wp%d' % (idx + 1))]
-                  for idx, _ in enumerate(self.waypoints)]
+                  for idx, wp in enumerate(self.waypoints) if wp['inspect']]
         update_types = [
-            KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.waypoints
+            KnowledgeUpdateServiceRequest.ADD_GOAL for wp in self.waypoints
+            if wp['inspect']
         ]
         # 'all drones must be back at home' goals
         pred_names.extend(['at' for _ in self.uavs])
@@ -267,7 +275,7 @@ class PlannerInterface(object):
         """
         # add wp connection assuming first and last wp can go to wp0 / home
         connections = [(i, i + 1) for i, _ in enumerate(self.waypoints)]
-        connections.extend([(0, len(self.waypoints))])
+        # connections.extend([(0, len(self.waypoints))])
         connections.extend([(j, i) for i, j in connections])
         succeed = self.update_predicates(
             ['connected' for _ in connections], [[
@@ -296,6 +304,14 @@ class PlannerInterface(object):
                 KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
                 for _ in self.takeoff_wps
             ])
+        # add wp where uav can do inspection
+        succeed = succeed and self.update_predicates(
+            ['inspect' for wp in self.waypoints if wp['inspect']],
+            [[KeyValue('wp', 'uav_wp%d' % (i + 1))]
+             for i, wp in enumerate(self.waypoints) if wp['inspect']], [
+                 KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
+                 for wp in self.waypoints if wp['inspect']
+             ])
         # add minimum-battery condition
         succeed = succeed and self.update_functions(
             ['minimum-battery'
@@ -467,6 +483,8 @@ class PlannerInterface(object):
                 self._action(
                     msg, uav.takeoff,
                     [rospy.get_param('~takeoff_altitude', 10.), duration])
+            elif msg.name == 'uav_inspect_blade':
+                self._action(msg, uav.inspect_wt, [duration])
             elif msg.name == 'uav_goto_waypoint':
                 self._action(msg, self.goto_waypoint,
                              [uav, msg.parameters, duration])
@@ -583,7 +601,7 @@ class PlannerInterface(object):
             if len(uav):
                 wp_uav.append(name)
                 at = int(re.findall(r'\d+', attribute.values[1].value)[0])
-                if uav[0]._current_wp != -1 and at != uav[0]._current_wp:
+                if uav[0]._current_wp != -1:
                     # add current wp that uav resides
                     pred_names.append('at')
                     params.append([
@@ -593,13 +611,14 @@ class PlannerInterface(object):
                     update_types.append(
                         KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
                     # remove previous wp that uav resided
-                    pred_names.append('at')
-                    params.append([
-                        KeyValue('v', uav[0].namespace),
-                        KeyValue('wp', 'uav_wp%d' % at)
-                    ])
-                    update_types.append(
-                        KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE)
+                    if at != uav[0]._current_wp:
+                        pred_names.append('at')
+                        params.append([
+                            KeyValue('v', uav[0].namespace),
+                            KeyValue('wp', 'uav_wp%d' % at)
+                        ])
+                        update_types.append(
+                            KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE)
                     # update visited state
                     pred_names.append('visited')
                     params.append(
