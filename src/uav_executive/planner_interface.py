@@ -83,7 +83,7 @@ class PlannerInterface(object):
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.fact_update)
         rospy.Timer(10 * self._rate.sleep_dur, self.function_update)
-        rospy.sleep(50 * self._rate.sleep_dur)
+        rospy.sleep(20 * self._rate.sleep_dur)
 
     def get_takeoff_wps(self, waypoints):
         """
@@ -132,13 +132,6 @@ class PlannerInterface(object):
         """
         UAV mission visiting all waypoints and coming back to launch pod
         """
-        # 'all waypoints must be visited' goals
-        # pred_names = ['visited' for _ in self.waypoints]
-        # params = [[KeyValue('wp', 'uav_wp%d' % (idx + 1))]
-        #           for idx, _ in enumerate(self.waypoints)]
-        # update_types = [
-        #     KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.waypoints
-        # ]
         # 'a drone must do inspect action' goals
         pred_names = ['inspected' for wp in self.waypoints if wp['inspect']]
         params = [[KeyValue('wp', 'uav_wp%d' % (idx + 1))]
@@ -170,7 +163,6 @@ class PlannerInterface(object):
         """
         self._wp_update()
         self._arm_update()
-        self._guide_update()
         self._landing_update()
 
     def function_update(self, event):
@@ -275,7 +267,6 @@ class PlannerInterface(object):
         """
         # add wp connection assuming first and last wp can go to wp0 / home
         connections = [(i, i + 1) for i, _ in enumerate(self.waypoints)]
-        # connections.extend([(0, len(self.waypoints))])
         connections.extend([(j, i) for i, j in connections])
         succeed = self.update_predicates(
             ['connected' for _ in connections], [[
@@ -286,8 +277,6 @@ class PlannerInterface(object):
         # add wp connection from takeoff waypoint to home and last wp
         connections = [(i, 'uav_wp0') for i in self.takeoff_wps
                        if ('asv' in i)]
-        connections.extend([(i, 'uav_wp%d' % len(self.waypoints))
-                            for i in self.takeoff_wps if ('asv' in i)])
         succeed = self.update_predicates(
             ['connected' for _ in connections],
             [[KeyValue('wp1', i[0]),
@@ -475,8 +464,6 @@ class PlannerInterface(object):
             uav = [i for i in self.uavs if i.namespace == uav_name[0]][0]
             if msg.name == 'uav_preflightcheck':
                 self._action(msg, self.preflightcheck, [uav, duration])
-            elif msg.name == 'uav_guide':
-                self._action(msg, uav.guided_mode, [duration])
             elif msg.name == 'uav_request_arm':
                 self._action(msg, uav.request_arm, [False, duration])
             elif msg.name == 'uav_takeoff':
@@ -521,37 +508,6 @@ class PlannerInterface(object):
                 update_types.extend([
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
                     KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE
-                ])
-        if pred_names != list():
-            self.update_predicates(pred_names, params, update_types)
-
-    def _guide_update(self):
-        """
-        Add or remove guide mode facts on ROSPlan knowledge base
-        """
-        guided_uav = list()
-        params = list()
-        pred_names = list()
-        update_types = list()
-        attributes = self._proposition_proxy('guided').attributes
-        for attribute in attributes:
-            name = attribute.values[0].value
-            uav = [i for i in self.uavs if i.namespace == name]
-            if len(uav):
-                guided_uav.append(name)
-                if uav[0].state.mode != 'GUIDED':
-                    pred_names.extend(['guided'])
-                    params.extend([[KeyValue('v', uav[0].namespace)]])
-                    update_types.extend([
-                        KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE,
-                    ])
-        for uav in self.uavs:
-            if not (uav.namespace in guided_uav
-                    ) and uav.state.mode == 'GUIDED':
-                pred_names.extend(['guided'])
-                params.extend([[KeyValue('v', uav.namespace)]])
-                update_types.extend([
-                    KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
                 ])
         if pred_names != list():
             self.update_predicates(pred_names, params, update_types)

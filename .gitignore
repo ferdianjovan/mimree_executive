@@ -44,4 +44,4 @@
 # package specific
 docs/
 pddl/problem*
-pddl/plan.pddl
+pddl/plan*

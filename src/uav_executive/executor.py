@@ -495,6 +495,9 @@ class ActionExecutor(object):
         Request for arming UAV
         """
         start = rospy.Time.now()
+        self.guided_mode(duration=duration)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
         if not disarm:
             rospy.loginfo('Waiting for the UAV to be ARMED ...')
         else:

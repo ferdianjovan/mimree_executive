@@ -87,7 +87,7 @@ class PlannerInterface(object):
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.fact_update)
         rospy.Timer(10 * self._rate.sleep_dur, self.function_update)
-        rospy.sleep(50 * self._rate.sleep_dur)
+        rospy.sleep(20 * self._rate.sleep_dur)
 
     def low_fuel_return_mission(self):
         """
@@ -487,7 +487,13 @@ class PlannerInterface(object):
             if len(asv):
                 wp_asv.append(name)
                 at = int(re.findall(r'\d+', attribute.values[1].value)[0])
+                # add current wp to drone position if drone is on top of asv
                 if asv[0]._current_wp != -1 and at != asv[0]._current_wp:
+                    if self.uav_carrier == asv[0].namespace:
+                        result = self._uav_wp_update(asv[0]._current_wp, at)
+                        pred_names.extend(result[0])
+                        params.extend(result[1])
+                        update_types.extend(result[2])
                     # add current wp that asv resides
                     pred_names.append('at')
                     params.append([
@@ -510,13 +516,14 @@ class PlannerInterface(object):
                         [KeyValue('wp', 'asv_wp%d' % asv[0]._current_wp)])
                     update_types.append(
                         KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
-                    if self.uav_carrier == asv[0].namespace:
-                        result = self._uav_wp_update(asv[0]._current_wp, at)
-                        pred_names.extend(result[0])
-                        params.extend(result[1])
-                        update_types.extend(result[2])
         for asv in self.asvs:
             if not (asv.namespace in wp_asv) and asv._current_wp != -1:
+                # add current wp to drone position if drone is on top of asv
+                if self.uav_carrier == asv.namespace:
+                    result = self._uav_wp_update(asv._current_wp)
+                    pred_names.extend(result[0])
+                    params.extend(result[1])
+                    update_types.extend(result[2])
                 # add current wp that asv resides
                 pred_names.append('at')
                 params.append([
@@ -530,11 +537,6 @@ class PlannerInterface(object):
                 params.append([KeyValue('wp', 'asv_wp%d' % asv._current_wp)])
                 update_types.append(
                     KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
-                if self.uav_carrier == asv.namespace:
-                    result = self._uav_wp_update(asv._current_wp)
-                    pred_names.extend(result[0])
-                    params.extend(result[1])
-                    update_types.extend(result[2])
         if pred_names != list():
             self.update_predicates(pred_names, params, update_types)
 

@@ -7,6 +7,7 @@
         :fluents
         :durative-actions
         :continuous-effects
+		:universal-preconditions
     )
 
     (:types
@@ -24,7 +25,6 @@
 
     (:predicates
         (carrier ?v - asv)
-        (guided ?v - uav)
         (landed ?v - uav)
         (airborne ?v - uav)
         (armed ?v - vehicle)
@@ -53,7 +53,7 @@
         :duration (= ?duration 600)
         :condition (and
             (at start (at ?v ?from))
-            (at start (> (fuel-percentage ?v) (minimum-fuel ?v)))
+			(over all (forall (?drone - uav) (airborne ?drone)))
             (over all (connected ?from ?to))
             (over all (armed ?v))
         )
@@ -71,7 +71,6 @@
         :condition (and
             (at start (at ?boat ?from))
             (at start (at ?drone ?from))
-            (at start (> (fuel-percentage ?boat) (minimum-fuel ?boat)))
             (over all (connected ?from ?to))
             (over all (armed ?boat))
             (over all (landed ?drone))
@@ -126,39 +125,6 @@
         )
     )
 
-    (:durative-action asv_lowfuel_return
-        :parameters (?v - asv ?from ?to - asv_waypoint)
-        :duration (= ?duration 540)
-        :condition (and
-            (over all (home ?to))
-            (over all (armed ?v))
-            (over all (= ?from ?to))
-            (at start (at ?v ?from))
-            (at start (<= (fuel-percentage ?v) (minimum-fuel ?v)))
-        )
-        :effect (and 
-            (decrease (fuel-percentage ?v) (* 0.01 #t))
-        )
-    )
-
-    (:durative-action asv_lowfuel_return_with_uav
-        :parameters (?boat - asv ?drone - uav ?from ?to - asv_waypoint)
-        :duration (= ?duration 540)
-        :condition (and
-            (over all (landed ?drone))
-            (over all (home ?to))
-            (over all (armed ?boat))
-            (over all (= ?from ?to))
-            (over all (carrier ?boat))
-            (at start (at ?boat ?from))
-            (at start (at ?drone ?from))
-            (at start (<= (fuel-percentage ?boat) (minimum-fuel ?boat)))
-        )
-        :effect (and 
-            (decrease (fuel-percentage ?boat) (* 0.01 #t))
-        )
-    )
-
     ;; UAV ACTIONS
     (:durative-action uav_preflightcheck
         :parameters  (?v - uav ?wp - waypoint)
@@ -171,24 +137,12 @@
         :effect (and (at end (preflightchecked ?v)))
     )
 
-    (:durative-action uav_guide
-        :parameters (?v - uav ?wp - waypoint)
-        :duration (= ?duration 60)
-        :condition (and 
-            (over all (at ?v ?wp))
-            (over all (takeoff ?wp))
-            (over all (preflightchecked ?v))
-        )
-        :effect (and (at end (guided ?v)))
-    )
-
     (:durative-action uav_request_arm
         :parameters (?v - uav ?wp - waypoint)
         :duration (= ?duration 180)
         :condition (and 
             (over all (at ?v ?wp))
             (over all (takeoff ?wp))
-            (at start (guided ?v))
             (over all (landed ?v))
             (over all (preflightchecked ?v))
         )
@@ -200,10 +154,8 @@
         :duration (= ?duration 120)
         :condition (and 
             (at start (landed ?v))
-            (at start (> (battery-amount ?v) (minimum-battery ?v)))
             (over all (at ?v ?from))
             (over all (armed ?v))
-            (over all (guided ?v))
             (over all (takeoff ?from))
             (over all (preflightchecked ?v))
         )
@@ -219,7 +171,6 @@
         :duration (= ?duration 600)
         :condition (and
             (at start (at ?v ?from))
-            (at start (> (battery-amount ?v) (minimum-battery ?v)))
             (over all (armed ?v))
             (over all (airborne ?v))
             (over all (connected ?from ?to))
@@ -272,23 +223,4 @@
             (decrease (battery-amount ?v) (* 0.0001 #t))
         )
     )
-
-    (:durative-action uav_lowbat_return
-        :parameters (?v - uav ?from ?to - uav_waypoint)
-        :duration (= ?duration 540)
-        :condition (and
-            (over all (= ?from ?to))
-            (over all (home ?from))
-            (over all (armed ?v))
-            (at start (airborne ?v))
-            (at start (at ?v ?from))
-            (at start (<= (battery-amount ?v) (minimum-battery ?v)))
-        )
-        :effect (and 
-            (at end (landed ?v))
-            (at start (not (airborne ?v)))
-            (decrease (battery-amount ?v) (* 0.0001 #t))
-        )
-    )
-
 )

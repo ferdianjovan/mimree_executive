@@ -59,4 +59,6 @@
     <arg name="action_feedback_topic"    value="action_feedback" />
   </include>
 
+  <node name="mission_plan_publisher" pkg="mimree_executive" type="plan_publisher.py" />
+
 </launch>

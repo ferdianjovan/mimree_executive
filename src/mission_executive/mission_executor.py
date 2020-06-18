@@ -1,22 +1,27 @@
 #!/usr/bin/env python
 
-# 3rd Party Packages
-import yaml
 import argparse
+
+import roslib
 # ROS Packages
 import rospy
-import roslib
-from std_srvs.srv import Empty
-from rosplan_dispatch_msgs.srv import (DispatchService,
-                                       DispatchServiceResponse)
-from uav_executive.planner_interface import PlannerInterface as PIUAV
+# 3rd Party Packages
+import yaml
 from asv_executive.planner_interface import PlannerInterface as PIASV
+from diagnostic_msgs.msg import KeyValue
+from rosplan_dispatch_msgs.srv import DispatchService, DispatchServiceResponse
+from rosplan_knowledge_msgs.msg import DomainFormula, ExprBase, KnowledgeItem
+from rosplan_knowledge_msgs.srv import (KnowledgeUpdateService,
+                                        KnowledgeUpdateServiceRequest)
+from std_srvs.srv import Empty
+from uav_executive.planner_interface import PlannerInterface as PIUAV
 
 
 class MissionExec(object):
     def __init__(self, filename, configname, update_frequency=2.):
         self._rate = rospy.Rate(update_frequency)
         config = self.load_mission_config_file(filename, configname)
+        self.metric_optimization = self._get_metric_optimisation(config)
         # UAV planner
         if len(config['uavs']) and len(config['uav_waypoints']):
             self.uav_exec = PIUAV(config['uavs'], config['uav_waypoints'],
@@ -49,6 +54,8 @@ class MissionExec(object):
             '/rosplan_plan_dispatcher/dispatch_plan', DispatchService)
         self._cancel_plan_proxy = rospy.ServiceProxy(
             '/rosplan_plan_dispatcher/cancel_dispatch', Empty)
+        self._knowledge_update_proxy = rospy.ServiceProxy(
+            '/rosplan_knowledge_base/update', KnowledgeUpdateService)
         # Service
         rospy.Service('%s/resume_plan' % rospy.get_name(), Empty,
                       self.resume_plan)
@@ -56,6 +63,31 @@ class MissionExec(object):
                       self.return_home_mission)
         # Auto call functions
         rospy.Timer(50 * self._rate.sleep_dur, self.low_battery_replan)
+
+    def _get_metric_optimisation(self, config):
+        request = KnowledgeUpdateServiceRequest()
+        request.update_type = KnowledgeUpdateServiceRequest.ADD_METRIC
+        request.knowledge.knowledge_type = KnowledgeItem.EXPRESSION
+        if (len(config['uavs']) + len(config['asvs'])) > 1:
+            request.knowledge.optimization = "maximize"
+            request.knowledge.expr.tokens.append(
+                ExprBase(expr_type=ExprBase.OPERATOR, op=ExprBase.ADD))
+            for name in config['uavs']:
+                function = DomainFormula('battery-amount',
+                                         [KeyValue('v', name)])
+                request.knowledge.expr.tokens.append(
+                    ExprBase(expr_type=ExprBase.FUNCTION, function=function))
+            for name in config['asvs']:
+                function = DomainFormula('fuel-percentage',
+                                         [KeyValue('v', name)])
+                request.knowledge.expr.tokens.append(
+                    ExprBase(expr_type=ExprBase.FUNCTION, function=function))
+        else:
+            request.knowledge.optimization = "minimize"
+            request.knowledge.expr.tokens.append(
+                ExprBase(expr_type=ExprBase.SPECIAL,
+                         special_type=ExprBase.TOTAL_TIME))
+        return request
 
     def load_mission_config_file(self, filename, configname):
         """
@@ -98,9 +130,11 @@ class MissionExec(object):
                 self.asv_exec.deploy_retrieve_mission()
             elif self.asv_exec is not None and full:
                 self.asv_exec.inspection_mission()
+            self._knowledge_update_proxy(self.metric_optimization)
             self.execute()
         if self.asv_exec is not None and self.uav_exec is None:
             self.asv_exec.inspection_mission()
+            self._knowledge_update_proxy(self.metric_optimization)
             self.execute()
 
     def return_home_mission(self, req):
@@ -115,6 +149,7 @@ class MissionExec(object):
                 self.uav_exec.low_battery_return_mission(all_return=True)
             self.asv_exec.low_fuel_return_mission()
             self.asv_exec.low_fuel_mission = True
+        self._knowledge_update_proxy(self.metric_optimization)
         self.cancel_plan()
         rospy.sleep(4 * self._rate.sleep_dur)
         achieved = self.execute()
@@ -144,6 +179,7 @@ class MissionExec(object):
         if replan:
             self.cancel_plan()
             rospy.sleep(4 * self._rate.sleep_dur)
+            self._knowledge_update_proxy(self.metric_optimization)
             achieved = self.execute()
             if self.uav_exec is not None:
                 self.uav_exec.low_battery_mission = not achieved

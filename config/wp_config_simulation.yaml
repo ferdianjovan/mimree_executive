@@ -4,8 +4,8 @@
   uav_waypoints:
 # hold_time in second, rel_alt is height above ground 
 # Please see Waypoint.msg in mavros_msgs package for other parameters
-      - {hold_time: 2.0, radius: 1.0, yaw: 0.0, lat: 43.7993805, long: 28.5936359, rel_alt:  40.0, inspect: False}
-      - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.7993805, long: 28.5936359, rel_alt:  100.0, inspect: True}
+      - {hold_time: 2.0, radius: 1.0, yaw: 0.0, lat: 43.7993805, long: 28.5936459, rel_alt:  40.0, inspect: False}
+      - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.7993805, long: 28.5936459, rel_alt:  100.0, inspect: True}
   asvs:
     - halcyon
   uav_carrier: halcyon
@@ -27,8 +27,8 @@
   uavs: 
     - hector
   uav_waypoints:
-      - {hold_time: 2.0, radius: 1.0, yaw: 0.0, lat: 43.7993805, long: 28.5936359, rel_alt:  40.0, inspect: False}
-      - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.7993805, long: 28.5936359, rel_alt:  100.0, inspect: True}
+      - {hold_time: 2.0, radius: 1.0, yaw: 0.0, lat: 43.7993805, long: 28.5936459, rel_alt:  40.0, inspect: False}
+      - {hold_time: 5.0, radius: 1.0, yaw: 0.0, lat: 43.7993805, long: 28.5936459, rel_alt:  100.0, inspect: True}
   asvs: []
   uav_carrier: '' 
   asv_waypoints: []
