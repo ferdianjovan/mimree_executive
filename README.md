@@ -19,6 +19,11 @@ On 1st Terminal (Launch Mavros for both UAV and ASV)
 ```
 roslaunch mimree_executive apm.launch use_asv:=true
 ```
+if the ASV is present in the simulation
+```
+roslaunch mimree_executive apm.launch use_asv:=false
+```
+if the ASV is not present
 
 On 2nd Terminal 
 ```
