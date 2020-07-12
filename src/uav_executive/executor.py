@@ -13,7 +13,6 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import BatteryState, NavSatFix, Range
 from std_msgs.msg import Float64, Header
 
-
 class ActionExecutor(object):
 
     INIT_VOLTAGE = 12.587
