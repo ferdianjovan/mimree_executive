@@ -1,7 +1,7 @@
 # ! /usr/bin/env python
 import roslib
 
-roslib.load_manifest('my_pkg_name')
+# roslib.load_manifest('my_pkg_name')
 import rospy
 import actionlib
 from mimree_executive.msg import FindTurbineOdomGoal, FindTurbineOdomAction
