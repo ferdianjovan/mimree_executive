@@ -37,17 +37,12 @@ catkin_python_setup()
 # )
 
 ## Generate actions in the 'action' folder
-# add_action_files(
-#   FILES
-#   Action1.action
-#   Action2.action
-# )
+add_action_files(
+DIRECTORY src/uav_executive/action FILES FindTurbineOdom.action
+)
 
 ## Generate added messages and services with any dependencies listed here
-# generate_messages(
-#   DEPENDENCIES
-#   diagnostic_msgs#   mavros_msgs#   rosplan_dispatch_msgs#   rosplan_knowledge_msgs#   sensor_msgs#   std_msgs
-# )
+generate_messages(DEPENDENCIES actionlib_msgs geometry_msgs)
 
 ################################################
 ## Declare ROS dynamic reconfigure parameters ##
