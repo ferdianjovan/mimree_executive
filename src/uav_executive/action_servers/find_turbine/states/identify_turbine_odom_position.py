@@ -1,10 +1,8 @@
 #!/usr/bin/env python
 import rospy
 import smach
-from geographic_msgs.msg import GeoPoseStamped
-from geometry_msgs.msg import PoseStamped
 
-from sensor_msgs.msg import Range
+from state_outcomes import WT_ODOM_POSITION_FOUND, ERROR
 
 
 class IdentifyTurbineOdomPosition(smach.State):
@@ -13,11 +11,9 @@ class IdentifyTurbineOdomPosition(smach.State):
     Tests if the tower is within range of the lidar sensors.
     """
 
-    def __init__(self, outcomes=['near_turbine', 'no_turbine_detected']):
-        # subscribe to estimated position
-        # init publisher to navigation (gps)
-        # subscribe to lidar sensors
-        # Publisher
+    def __init__(self):
+        self._outcomes = [WT_ODOM_POSITION_FOUND,ERROR]
+
         pass
 
     def execute(self, userdata):
@@ -34,5 +30,8 @@ class IdentifyTurbineOdomPosition(smach.State):
         # # navigate to within x meters of estimated position
         # # check for lidar values at same height
         # # return self.outcomes[0]
-        pass
+        if True:
+            return WT_ODOM_POSITION_FOUND
+        return ERROR
 
+        pass
