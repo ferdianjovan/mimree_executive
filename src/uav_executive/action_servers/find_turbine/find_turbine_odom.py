@@ -40,7 +40,7 @@ class FindTurbineOdomServer:
         sm.userdata = self.msg_to_dict(goal)
 
         with sm:
-            # drone flight to estimated position of turbine
+                # drone flight to estimated position of turbinehttps://2.bp.blogspot.com/uW4v5wLM_virixoivjgVVOL4VYZKA6rFUrQXHzQvEpiRj17TmtrZPWrsO9Jqs7rlpFWoW_Fhmx6dZvPdjLOMCcUuFdh-vhoFUwoRWELhD5ARB4HVruuzET9vczt9QvYYczaa4IRSWg=s0?title=ODEuMjUxLjEzMy4yNDU=001-003___1593434756.png
 
             smach.StateMachine.add('FlyToEstimatedTurbinePosition', FlyToEstimatedTurbinePosition(),
                                    transitions={
@@ -52,7 +52,7 @@ class FindTurbineOdomServer:
                                        'ftetp_output':'sm_output'
                                    }
                                   )
-            # drone identification of turbine orientation (main column is in front of or behind wings & face)
+            # drone identification of turbine orientation (main column is in front of or behind wings & face)https://2.bp.blogspot.com/W2LcnA8adgre7euW-M6aiOFPZSwg0gQOeaQkJSGAdrssZFx75B0-dVsAcuPTe-ArcN2XRSg8W_q0G8fj7GPxhHvoWl_0aGVBFlab9BguYU9JVuH9x_RbgkdKtxONRU5h-QqTP3ru_g=s0?title=ODEuMjUxLjEzMy4yNDU=007-001___1594811036.png
 
             smach.StateMachine.add('IdentifyTurbineOdomOrientation', IdentifyTurbineOdomOrientation(),
                                    transitions={WT_ODOM_ORIENTATION_FOUND: 'IdentifyTurbineOdomPosition',
