@@ -42,7 +42,7 @@ DIRECTORY src/uav_executive/action FILES FindTurbineOdom.action
 )
 
 ## Generate added messages and services with any dependencies listed here
-generate_messages(DEPENDENCIES actionlib_msgs geometry_msgs)
+generate_messages(DEPENDENCIES actionlib_msgs geometry_msgs geographic_msgs)
 
 ################################################
 ## Declare ROS dynamic reconfigure parameters ##

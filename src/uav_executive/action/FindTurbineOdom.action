@@ -1,5 +1,7 @@
 # Goal
-geometry_msgs/Pose turbine_estimated_position
+geographic_msgs/GeoPoseStamped turbine_estimated_position
+string uav_namespace
+
 ---
 # RESULT (odom)
 geometry_msgs/Pose turbine_pose

@@ -16,7 +16,7 @@ from rosplan_knowledge_msgs.srv import (KnowledgeUpdateService,
 from std_srvs.srv import Empty
 from uav_executive.planner_interface import PlannerInterface as PIUAV
 
-
+from geometry_msgs.msg._Pose import Pose
 class MissionExec(object):
     def __init__(self, filename, configname, update_frequency=2.):
         self._rate = rospy.Rate(update_frequency)

@@ -1,0 +1,6 @@
+WT_ODOM_IDENTIFIED='turbine_odom_identified'
+WT_ODOM_POSITION_FOUND='wt_odom_position'
+WT_ODOM_ORIENTATION_FOUND='wt_odom_orientation'
+WT_NOT_FOUND='no_turbine_detected'
+WT_FOUND='near_turbine'
+ERROR='error'

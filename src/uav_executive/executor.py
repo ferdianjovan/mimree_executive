@@ -13,8 +13,8 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import BatteryState, NavSatFix, Range
 from std_msgs.msg import Float64, Header
 
-class ActionExecutor(object):
 
+class ActionExecutor(object):
     INIT_VOLTAGE = 12.587
     MINIMUM_VOLTAGE = 12.19
     EXTERNAL_INTERVENTION = -2
@@ -47,6 +47,7 @@ class ActionExecutor(object):
         self._current_wp = -1
         self._rel_alt = [0. for _ in range(20)]
         self._rangefinder = [-1. for _ in range(30)]
+        self.rangefinder_msg = Range()
         self._min_range = -1.
         self._status_text = ''
         self._arm_status = [False for _ in range(5)]
@@ -164,6 +165,7 @@ class ActionExecutor(object):
         """
         Rangefinder call back
         """
+        self.rangefinder_msg = msg
         self._rangefinder[msg.header.seq % len(self._rangefinder)] = msg.range
         self.rangefinder = np.mean(self._rangefinder)
         if (self._min_range == -1) and (-1. not in self._rangefinder):
@@ -262,7 +264,7 @@ class ActionExecutor(object):
         Watch whether human operator intervenes
         """
         mode_status_check = (self.current_mode != '') and (
-            self.state.mode not in [self.current_mode, self.previous_mode])
+                self.state.mode not in [self.current_mode, self.previous_mode])
         # stabilize_on_land_check = (
         #     self.state.mode == 'STABILIZE') and self.landed
         self.external_intervened = mode_status_check or self._cancel_action
@@ -341,7 +343,7 @@ class ActionExecutor(object):
         if self.state.mode != mode.upper():
             while (rospy.Time.now() - start <
                    duration) and (not rospy.is_shutdown()) and (
-                       not guided) and (not self.external_intervened):
+                    not guided) and (not self.external_intervened):
                 guided = self._set_mode_proxy(0, mode).mode_sent
                 if guided:
                     self.previous_mode = self.current_mode
@@ -370,7 +372,7 @@ class ActionExecutor(object):
         if not self.state.armed:
             while (rospy.Time.now() - start <
                    duration) and (not rospy.is_shutdown()) and (
-                       not armed) and (not self.external_intervened):
+                    not armed) and (not self.external_intervened):
                 armed = self._arming_proxy(True).success
                 self._rate.sleep()
             rospy.loginfo('Arming the UAV ...')
@@ -396,8 +398,8 @@ class ActionExecutor(object):
             rospy.loginfo('UAV is taking off to %d meter height' % altitude)
             while (rospy.Time.now() - start <
                    duration) and (not rospy.is_shutdown()
-                                  ) and (self.rel_alt - altitude) < -0.5 and (
-                                      not self.external_intervened):
+            ) and (self.rel_alt - altitude) < -0.5 and (
+                    not self.external_intervened):
                 if not took_off:
                     took_off = self._takeoff_proxy(0.1, 0, 0, 0,
                                                    altitude).success
@@ -428,7 +430,7 @@ class ActionExecutor(object):
         auto = False
         while (rospy.Time.now() - start <
                duration) and (not rospy.is_shutdown()) and (
-                   not self.external_intervened) and (not auto):
+                not self.external_intervened) and (not auto):
             auto = self._set_mode_proxy(0, 'auto').mode_sent
             if auto:
                 self.previous_mode = self.current_mode
@@ -439,7 +441,7 @@ class ActionExecutor(object):
         start = rospy.Time.now()
         while (rospy.Time.now() - start < duration) and not (
                 rospy.is_shutdown()) and (not self.external_intervened) and (
-                    (waypoint != self.wp_reached)):
+                (waypoint != self.wp_reached)):
             if not low_battery_trip and self.low_battery:
                 rospy.logwarn('Battery is below minimum voltage!')
                 break
@@ -466,7 +468,7 @@ class ActionExecutor(object):
         start = rospy.Time.now()
         while (rospy.Time.now() - start <
                duration) and not (rospy.is_shutdown()) and (
-                   not self.external_intervened) and (not reached):
+                not self.external_intervened) and (not reached):
             if self.low_battery:
                 rospy.logwarn('Battery is below minimum voltage!')
                 break
@@ -503,7 +505,7 @@ class ActionExecutor(object):
             rospy.loginfo('Waiting for the UAV to be DISARMED ...')
         while (rospy.Time.now() - start < duration) and not (
                 rospy.is_shutdown()) and (not self.external_intervened) and (
-                    not (disarm ^ self.state.armed)):
+                not (disarm ^ self.state.armed)):
             self._rate.sleep()
         response = int(self.state.armed ^ disarm)
         if (rospy.Time.now() - start) > duration:
@@ -527,8 +529,8 @@ class ActionExecutor(object):
         auto = False
         while (rospy.Time.now() - start <
                duration) and (not rospy.is_shutdown()) and (
-                   not self.external_intervened) and len(wps_reached) < len(
-                       self.waypoints[waypoint:]):
+                not self.external_intervened) and len(wps_reached) < len(
+            self.waypoints[waypoint:]):
             if not auto:
                 rospy.loginfo('Setting mode to AUTO ...')
                 auto = self._set_mode_proxy(0, 'auto').mode_sent
@@ -561,7 +563,7 @@ class ActionExecutor(object):
             self.current_mode = 'RTL'
         while (rospy.Time.now() - start <
                duration) and not (rospy.is_shutdown()) and (
-                   not self.external_intervened) and (not self.landed):
+                not self.external_intervened) and (not self.landed):
             cond = monitor_home and self.home_moved and (self.rel_alt < 10.)
             if cond or self.current_mode != 'RTL':
                 duration = duration - (rospy.Time.now() - start)
@@ -586,7 +588,7 @@ class ActionExecutor(object):
         landed = 0
         while (rospy.Time.now() - start <
                duration) and not (rospy.is_shutdown()) and (
-                   not self.external_intervened) and (not self.landed):
+                not self.external_intervened) and (not self.landed):
             if landed == self.ACTION_SUCCESS:
                 self._rate.sleep()
                 continue
@@ -674,14 +676,14 @@ class ActionExecutor(object):
         rospy.loginfo("Scan second blade...")
         second_blade = self.blade_inspect(original, relative_altitude, [
             0.000, 0.0006 * np.cos(138. / 180.0 * np.pi),
-            85.6 * np.sin(138. / 180.0 * np.pi)
+                   85.6 * np.sin(138. / 180.0 * np.pi)
         ], duration)
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
         rospy.loginfo("Scan third blade...")
         third_blade = self.blade_inspect(original, relative_altitude, [
             0.000, 0.0006 * np.cos(234. / 180.0 * np.pi),
-            85.6 * np.sin(234. / 180.0 * np.pi)
+                   85.6 * np.sin(234. / 180.0 * np.pi)
         ], duration)
         rospy.loginfo("Inspection is done...")
         return np.min([first_blade, second_blade, third_blade])
@@ -707,11 +709,11 @@ class ActionExecutor(object):
         uav_orientation = tf.transformations.euler_from_quaternion(quaternion,
                                                                    axes='sxyz')
         latitude = self.global_pose.latitude + (
-            target_position[0] * np.sin(uav_orientation[2]) +
-            target_position[1] * np.cos(uav_orientation[2]))
+                target_position[0] * np.sin(uav_orientation[2]) +
+                target_position[1] * np.cos(uav_orientation[2]))
         longitude = self.global_pose.longitude + (
-            target_position[0] * np.cos(uav_orientation[2]) +
-            target_position[1] * np.sin(uav_orientation[2]))
+                target_position[0] * np.cos(uav_orientation[2]) +
+                target_position[1] * np.sin(uav_orientation[2]))
         altitude = self.rel_alt + target_position[2]
         target = GeoPoseStamped()
         target.header.seq = 1
@@ -736,7 +738,7 @@ class ActionExecutor(object):
             reached_original = self.goto_coordinate(original, duration)
             if abs(self._rel_alt[-1] - relative_altitude) > 0.1:
                 original.pose.position.altitude = (
-                    original.pose.position.altitude + relative_altitude -
-                    self._rel_alt[-1])
+                        original.pose.position.altitude + relative_altitude -
+                        self._rel_alt[-1])
                 reached_original = self.goto_coordinate(original, duration)
         return np.min([reached_target, reached_original])

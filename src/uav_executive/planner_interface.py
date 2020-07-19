@@ -20,7 +20,6 @@ from uav_executive.preflightcheck import PreFlightCheck
 
 
 class PlannerInterface(object):
-
     mutex = Lock()
 
     def __init__(self,
@@ -298,9 +297,9 @@ class PlannerInterface(object):
             ['inspect' for wp in self.waypoints if wp['inspect']],
             [[KeyValue('wp', 'uav_wp%d' % (i + 1))]
              for i, wp in enumerate(self.waypoints) if wp['inspect']], [
-                 KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
-                 for wp in self.waypoints if wp['inspect']
-             ])
+                KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
+                for wp in self.waypoints if wp['inspect']
+            ])
         # add minimum-battery condition
         succeed = succeed and self.update_functions(
             ['minimum-battery'
@@ -347,7 +346,7 @@ class PlannerInterface(object):
                 [min_batt - 0.15],
                 [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             resp = ActionExecutor.ACTION_SUCCESS if (
-                succeed and self._preflightcheck(preflightcheck)
+                    succeed and self._preflightcheck(preflightcheck)
             ) else ActionExecutor.ACTION_FAIL
         except ValueError:
             rospy.logwarn(
@@ -471,7 +470,15 @@ class PlannerInterface(object):
                     msg, uav.takeoff,
                     [rospy.get_param('~takeoff_altitude', 10.), duration])
             elif msg.name == 'uav_inspect_blade':
+                # add a state wrapper here? something like (SMACH.START_INSPECT_TURBINE(uav)
+                # this way the state can take advantage of the uav objet which is subscribed to the relevant topics
+                # and can navigate to given coordinates?
+
+                # So Instead of:
                 self._action(msg, uav.inspect_wt, [duration])
+                # It would be something like this:
+                # self._action(msg,SMACH.START_INSPECT_TURBINE,[uav])
+
             elif msg.name == 'uav_goto_waypoint':
                 self._action(msg, self.goto_waypoint,
                              [uav, msg.parameters, duration])
