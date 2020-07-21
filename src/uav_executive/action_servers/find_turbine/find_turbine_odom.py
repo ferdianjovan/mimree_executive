@@ -33,16 +33,17 @@ class FindTurbineOdomServer:
         # A SMACH implementation of the following tasks:
         # rospy.loginfo("EXECUTING FIND TURBINE SERVER: "+ str(goal))
         print('EXEC Find Turbine')
+
         sm = smach.StateMachine(outcomes=[WT_NOT_FOUND, WT_ODOM_IDENTIFIED, ERROR],
                                 input_keys=goal.__slots__,
                                 output_keys=goal.__slots__
                                 )
-        print(type(sm.userdata))
-        sm.userdata._data=self.msg_to_dict(goal)
+        userdata=self.msg_to_dict(goal)
+        sm.userdata._data=userdata
         with sm:
-            # drone flight to estimated position of turbinehttps://2.bp.blogspot.com/uW4v5wLM_virixoivjgVVOL4VYZKA6rFUrQXHzQvEpiRj17TmtrZPWrsO9Jqs7rlpFWoW_Fhmx6dZvPdjLOMCcUuFdh-vhoFUwoRWELhD5ARB4HVruuzET9vczt9QvYYczaa4IRSWg=s0?title=ODEuMjUxLjEzMy4yNDU=001-003___1593434756.png
+            # drone flight to estimated position oBoucf turbinehttps://2.bp.blogspot.com/uW4v5wLM_virixoivjgVVOL4VYZKA6rFUrQXHzQvEpiRj17TmtrZPWrsO9Jqs7rlpFWoW_Fhmx6dZvPdjLOMCcUuFdh-vhoFUwoRWELhD5ARB4HVruuzET9vczt9QvYYczaa4IRSWg=s0?title=ODEuMjUxLjEzMy4yNDU=001-003___1593434756.png
 
-            smach.StateMachine.add('FlyToEstimatedTurbinePosition', FlyToEstimatedTurbinePosition(goal.__slots__),
+            smach.StateMachine.add('FlyToEstimatedTurbinePosition', FlyToEstimatedTurbinePosition(goal.__slots__,userdata['uav_namespace']),
                                    transitions={
                                        ERROR: ERROR,
                                        WT_NOT_FOUND: WT_NOT_FOUND,

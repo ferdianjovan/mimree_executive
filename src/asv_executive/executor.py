@@ -430,4 +430,5 @@ class ActionExecutor(object):
             rtl_set = self.OUT_OF_DURATION
         if self.external_intervened:
             rtl_set = self.EXTERNAL_INTERVENTION
+
         return int(rtl_set)
