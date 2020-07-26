@@ -21,7 +21,7 @@ class FlyToEstimatedTurbinePosition(State):
         # init publisher to navigation (gps)
         # subscribe to lidar sensors
         # Publisher
-
+        print("INITIATED FLY TO EST POS")
         uav_topic_name = '/%s/mavros/setpoint_position/global' % uav_namespace
 
         self.nav_pub = rospy.Publisher(
@@ -30,13 +30,16 @@ class FlyToEstimatedTurbinePosition(State):
             queue_size=10)
         rospy.Subscriber(uav_topic_name, GeoPoseStamped, self.print_nav_pub, queue_size=10)
         rospy.Subscriber('/edge_wt_detector', PoseArray, self.detect_turbine, queue_size=10)
-
         pass
 
     def execute(self, userdata):
+        print("====================================================")
+        time.sleep(10)
         print("\n\n\n", " EXECUTING FLY TO ESTIMATED TURBINE POSITION: ", userdata.keys())
         print("\n\n", userdata)
         data = userdata
+        # rospy.init_node(data.uav_namespace+'_fly_to_estimated_turbine_position')
+
         self.nav_to_est_wt_pos(data.turbine_estimated_position)
         time.sleep(100)
         if True:
@@ -53,14 +56,13 @@ class FlyToEstimatedTurbinePosition(State):
         print("NAVIGATING TO: ")
         print(est_pos)
         print(self.nav_pub)
-        print(self.nav_pub.resolved_name)
         print(self.nav_pub.name)
         print(self.nav_pub.get_num_connections())
         print(self.nav_pub.reg_type)
         print(self.nav_pub.impl)
         print(self.nav_pub.data_class)
         self.nav_pub.publish(est_pos)
-        print(self.nav_pub.publish(est_pos))
+        print("NAVIGATION MESSAGE SENT")
 
     def detect_turbine(self, msg):
         # print('DETECTING TURBINE: ')

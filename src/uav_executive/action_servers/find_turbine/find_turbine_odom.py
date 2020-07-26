@@ -4,6 +4,7 @@ import actionlib
 # roslib.load_manifest('my_pkg_name')
 import rospy
 import smach
+from geographic_msgs.msg import GeoPoseStamped
 from mimree_executive.msg import FindTurbineOdomAction
 from states.fly_to_estimated_turbine_position import FlyToEstimatedTurbinePosition
 from states.identify_turbine_odom_orientation import IdentifyTurbineOdomOrientation
@@ -14,8 +15,9 @@ from states.state_outcomes import WT_NOT_FOUND
 from states.state_outcomes import WT_ODOM_IDENTIFIED
 from states.state_outcomes import WT_ODOM_ORIENTATION_FOUND
 from states.state_outcomes import WT_ODOM_POSITION_FOUND
-
-
+import time
+# ('pub', '/hector/mavros/setpoint_position/global', <class 'geographic_msgs.msg._GeoPoseStamped.GeoPoseStamped'>)
+# ('pub', '/hector/mavros/setpoint_position/global', <class 'geographic_msgs.msg._GeoPoseStamped.GeoPoseStamped'>)
 class FindTurbineOdomServer:
     """
     The Turbine Odom is defined as follows:
@@ -26,6 +28,9 @@ class FindTurbineOdomServer:
 
     def __init__(self):
         print("STARTING FIND TURBINE ODOM SERVER")
+        uav_topic_name = '/hector/mavros/setpoint_position/global'
+
+
         self.server = actionlib.SimpleActionServer('find_turbine_odom', FindTurbineOdomAction, self.execute, False)
         self.server.start()
 
@@ -38,12 +43,13 @@ class FindTurbineOdomServer:
                                 input_keys=goal.__slots__,
                                 output_keys=goal.__slots__
                                 )
-        userdata=self.msg_to_dict(goal)
-        sm.userdata._data=userdata
+        userdata = self.msg_to_dict(goal)
+        sm.userdata._data = userdata
         with sm:
             # drone flight to estimated position oBoucf turbinehttps://2.bp.blogspot.com/uW4v5wLM_virixoivjgVVOL4VYZKA6rFUrQXHzQvEpiRj17TmtrZPWrsO9Jqs7rlpFWoW_Fhmx6dZvPdjLOMCcUuFdh-vhoFUwoRWELhD5ARB4HVruuzET9vczt9QvYYczaa4IRSWg=s0?title=ODEuMjUxLjEzMy4yNDU=001-003___1593434756.png
 
-            smach.StateMachine.add('FlyToEstimatedTurbinePosition', FlyToEstimatedTurbinePosition(goal.__slots__,userdata['uav_namespace']),
+            smach.StateMachine.add('FlyToEstimatedTurbinePosition',
+                                   FlyToEstimatedTurbinePosition(goal.__slots__, userdata['uav_namespace']),
                                    transitions={
                                        ERROR: ERROR,
                                        WT_NOT_FOUND: WT_NOT_FOUND,
@@ -77,4 +83,4 @@ class FindTurbineOdomServer:
 if __name__ == '__main__':
     rospy.init_node('mission_find_turbine_odom_server')
     server = FindTurbineOdomServer()
-    rospy.spin()
+    # rospy.spin()
