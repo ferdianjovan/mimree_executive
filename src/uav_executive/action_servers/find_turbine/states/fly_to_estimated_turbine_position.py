@@ -3,9 +3,11 @@ import time
 
 import rospy
 from geographic_msgs.msg import GeoPoseStamped
-from geometry_msgs.msg import PoseArray
+from geometry_msgs.msg import TwistStamped
 from smach import State
 from state_outcomes import WT_FOUND, WT_NOT_FOUND, ERROR
+
+from .utils import wait_for_stop
 
 
 class FlyToEstimatedTurbinePosition(State):
@@ -28,14 +30,22 @@ class FlyToEstimatedTurbinePosition(State):
             uav_topic_name,
             GeoPoseStamped,
             queue_size=10)
+        self.odom = TwistStamped()
+        self.od_sub = rospy.Subscriber(uav_namespace + '/mavros/local_position/velocity_body', TwistStamped,
+                                       self.update_odom)
+        time.sleep(2)
+        print(self.od_sub, self.od_sub.get_num_connections())
 
-        rospy.Subscriber('/edge_wt_detector', PoseArray, self.detect_turbine, queue_size=10)
-        # rospy.Subscriber('/hector/' + uav_namespace + '/global_position/global', GeoPoseStamped, self.update_odom)
         pass
+
+    def cleanup(self):
+        self.nav_pub.unregister()
+        self.od_sub.unregister()
 
     def update_odom(self, msg):
         print(type(msg))
-        self.odom = msg
+        self.odom.twist.linear = msg.twist.linear
+        self.odom.twist.angular = msg.twist.angular
 
     def execute(self, userdata):
         print("====================================================")
@@ -49,7 +59,9 @@ class FlyToEstimatedTurbinePosition(State):
         print("AWAITING FOR ARIVAL AT DEST: ")
         # print(wait_for_action_completion(100, data.turbine_estimated_position, 1, 0.1, self.odom))
         # for now just return the drone has arrived after x seconds
-        time.sleep(20)
+        time.sleep(2)
+        wait_for_stop(200, self.odom, 0.1, 0.1, )
+        self.cleanup()
         if True:
             return WT_FOUND
         elif True:

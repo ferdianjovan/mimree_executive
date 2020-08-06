@@ -39,3 +39,27 @@ def wait_for_action_completion(timeout, target_pose, pos_err, or_err,
         if np.all(map((lambda a, b: b[0] < a < b[1]), c_ranges, t_ranges)):
             return (True, "POSE_REACHED")
     return (False, "OUT_OF_TIME")
+
+
+def wait_for_stop(timeout, vel_stream, ang_thresh, lin_thresh):
+    """
+
+    :param timeout:
+    :param vel_stream: Twist message
+    :return:
+    """
+    print("WAITING FOR STOP: ")
+    time_elapsed = time.time()
+    attributes = ['x', 'y', 'z']
+    while timeout > 0:
+        timeout -= time.time() - time_elapsed
+        time_elapsed = time.time()
+        l_xyz = map(lambda a: abs(vel_stream.twist.linear.__getattribute__(a)), attributes)
+        a_xyz = map(lambda a: abs(vel_stream.twist.angular.__getattribute__(a)), attributes)
+        print(l_xyz, a_xyz)
+        if np.all(map(lambda a, l: a < ang_thresh and l < lin_thresh, a_xyz, l_xyz)):
+            print('ARRIVED')
+            break
+        else:
+            time.sleep(0.1)
+    print("TIMEOUT REACHED")

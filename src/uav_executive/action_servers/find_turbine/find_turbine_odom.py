@@ -4,7 +4,6 @@ import actionlib
 # roslib.load_manifest('my_pkg_name')
 import rospy
 import smach
-from geographic_msgs.msg import GeoPoseStamped
 from mimree_executive.msg import FindTurbineOdomAction
 from states.fly_to_estimated_turbine_position import FlyToEstimatedTurbinePosition
 from states.identify_turbine_odom_orientation import IdentifyTurbineOdomOrientation
@@ -16,7 +15,7 @@ from states.state_outcomes import WT_ODOM_IDENTIFIED
 from states.state_outcomes import WT_ODOM_ORIENTATION_FOUND
 from states.state_outcomes import WT_ODOM_POSITION_FOUND
 
-import time
+
 # ('pub', '/hector/mavros/setpoint_position/global', <class 'geographic_msgs.msg._GeoPoseStamped.GeoPoseStamped'>)
 # ('pub', '/hector/mavros/setpoint_position/global', <class 'geographic_msgs.msg._GeoPoseStamped.GeoPoseStamped'>)
 class FindTurbineOdomServer:
@@ -30,7 +29,6 @@ class FindTurbineOdomServer:
     def __init__(self):
         print("STARTING FIND TURBINE ODOM SERVER")
         uav_topic_name = '/hector/mavros/setpoint_position/global'
-
 
         self.server = actionlib.SimpleActionServer('find_turbine_odom', FindTurbineOdomAction, self.execute, False)
         self.server.start()
@@ -46,6 +44,7 @@ class FindTurbineOdomServer:
                                 )
         userdata = self.msg_to_dict(goal)
         sm.userdata._data = userdata
+
         with sm:
             # drone flight to estimated position oBoucf turbinehttps://2.bp.blogspot.com/uW4v5wLM_virixoivjgVVOL4VYZKA6rFUrQXHzQvEpiRj17TmtrZPWrsO9Jqs7rlpFWoW_Fhmx6dZvPdjLOMCcUuFdh-vhoFUwoRWELhD5ARB4HVruuzET9vczt9QvYYczaa4IRSWg=s0?title=ODEuMjUxLjEzMy4yNDU=001-003___1593434756.png
 
@@ -59,7 +58,8 @@ class FindTurbineOdomServer:
                                    )
             # drone identification of turbine orientation (main column is in front of or behind wings & face)https://2.bp.blogspot.com/W2LcnA8adgre7euW-M6aiOFPZSwg0gQOeaQkJSGAdrssZFx75B0-dVsAcuPTe-ArcN2XRSg8W_q0G8fj7GPxhHvoWl_0aGVBFlab9BguYU9JVuH9x_RbgkdKtxONRU5h-QqTP3ru_g=s0?title=ODEuMjUxLjEzMy4yNDU=007-001___1594811036.png
 
-            smach.StateMachine.add('IdentifyTurbineOdomOrientation', IdentifyTurbineOdomOrientation(),
+            smach.StateMachine.add('IdentifyTurbineOdomOrientation',
+                                   IdentifyTurbineOdomOrientation(goal.__slots__, userdata['uav_namespace']),
                                    transitions={WT_ODOM_ORIENTATION_FOUND: 'IdentifyTurbineOdomPosition',
                                                 ERROR: ERROR,
                                                 })
@@ -75,7 +75,6 @@ class FindTurbineOdomServer:
             self.server.set_succeeded()
 
     def msg_to_dict(self, msg):
-
         ret = {}
         for sl in msg.__slots__:
             ret[sl] = msg.__getattribute__(sl)
