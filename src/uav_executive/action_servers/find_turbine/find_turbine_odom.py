@@ -15,6 +15,7 @@ from states.state_outcomes import WT_NOT_FOUND
 from states.state_outcomes import WT_ODOM_IDENTIFIED
 from states.state_outcomes import WT_ODOM_ORIENTATION_FOUND
 from states.state_outcomes import WT_ODOM_POSITION_FOUND
+
 import time
 # ('pub', '/hector/mavros/setpoint_position/global', <class 'geographic_msgs.msg._GeoPoseStamped.GeoPoseStamped'>)
 # ('pub', '/hector/mavros/setpoint_position/global', <class 'geographic_msgs.msg._GeoPoseStamped.GeoPoseStamped'>)
@@ -74,6 +75,7 @@ class FindTurbineOdomServer:
             self.server.set_succeeded()
 
     def msg_to_dict(self, msg):
+
         ret = {}
         for sl in msg.__slots__:
             ret[sl] = msg.__getattribute__(sl)
