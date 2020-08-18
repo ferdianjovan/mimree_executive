@@ -47,6 +47,7 @@ class FlyToEstimatedTurbinePosition(State):
         self.odom.twist.linear = msg.twist.linear
         self.odom.twist.angular = msg.twist.angular
 
+
     def execute(self, userdata):
         print("====================================================")
         self.await_connections()
@@ -60,7 +61,7 @@ class FlyToEstimatedTurbinePosition(State):
         # print(wait_for_action_completion(100, data.turbine_estimated_position, 1, 0.1, self.odom))
         # for now just return the drone has arrived after x seconds
         time.sleep(2)
-        wait_for_stop(200, self.odom, 0.1, 0.1, )
+        wait_for_stop(200, self.odom, 0.05, 0.15, )
         self.cleanup()
         if True:
             return WT_FOUND
