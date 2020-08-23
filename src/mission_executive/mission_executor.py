@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import argparse
+import sys
 
 import roslib
 # ROS Packages
@@ -16,16 +17,18 @@ from rosplan_knowledge_msgs.srv import (KnowledgeUpdateService,
 from std_srvs.srv import Empty
 from uav_executive.planner_interface import PlannerInterface as PIUAV
 
-from geometry_msgs.msg._Pose import Pose
+
 class MissionExec(object):
     def __init__(self, filename, configname, update_frequency=2.):
+        self.current_mission = ''
         self._rate = rospy.Rate(update_frequency)
         config = self.load_mission_config_file(filename, configname)
         self.metric_optimization = self._get_metric_optimisation(config)
         # UAV planner
         if len(config['uavs']) and len(config['uav_waypoints']):
             self.uav_exec = PIUAV(config['uavs'], config['uav_waypoints'],
-                                  config['asv_waypoints'])
+                                  config['asv_waypoints'],
+                                  config['uav_carrier'])
         else:
             self.uav_exec = None
         # ASV planner
@@ -125,6 +128,7 @@ class MissionExec(object):
         Inspection mission
         """
         if self.uav_exec is not None:
+            self.uav_exec.mission = self.current_mission
             self.uav_exec.inspection_mission()
             if self.asv_exec is not None and not full:
                 self.asv_exec.deploy_retrieve_mission()
@@ -137,10 +141,35 @@ class MissionExec(object):
             self._knowledge_update_proxy(self.metric_optimization)
             self.execute()
 
+    def flytest_mission(self):
+        """
+        Landing on a moving boat
+        """
+        if self.uav_exec is not None:
+            self.uav_exec.mission = self.current_mission
+            self.uav_exec.visit_waypoint_mission()
+            self._knowledge_update_proxy(self.metric_optimization)
+            self.execute()
+        else:
+            rospy.logerr("There is no UAV to run a mission!")
+
+    def tracking_mission(self):
+        """
+        Tracking a moving boat
+        """
+        if self.uav_exec is not None:
+            self.uav_exec.mission = self.current_mission
+            self.uav_exec.tracking_mission(self.uav_exec.uavs[-1].asv_carrier)
+            self._knowledge_update_proxy(self.metric_optimization)
+            self.execute()
+        else:
+            rospy.logerr("There is no UAV to run a mission!")
+
     def return_home_mission(self, req):
         """
         Mission to return home
         """
+        self.current_mission = 'return'
         if self.uav_exec is not None:
             self.uav_exec.low_battery_return_mission(all_return=False)
             self.uav_exec.low_battery_mission = True
@@ -164,6 +193,7 @@ class MissionExec(object):
         Assets return home due to low battery voltage
         """
         replan = False
+        self.current_mission = 'return'
         if self.uav_exec is not None and True in self.uav_exec.lowbat.values():
             self.uav_exec.low_battery_return_mission(all_return=False)
             self.uav_exec.low_battery_mission = True
@@ -224,11 +254,22 @@ if __name__ == '__main__':
                             dest='config_file',
                             default='wp_config_simulation.yaml',
                             help='waypoint\'s file name')
-    parser_arg.add_argument('-m',
+    parser_arg.add_argument('-c',
                             dest='config_mission',
                             default='mangalia',
                             help='Mission configuration')
-    args = parser_arg.parse_args()
+    parser_arg.add_argument(
+        '-m',
+        dest='mission',
+        default='inspection',
+        help="Mission Type [inspection | flytest | tracking]")
+    args = parser_arg.parse_args(sys.argv[1:7])
     mission_exec = MissionExec(args.config_file, args.config_mission)
-    mission_exec.inspection_mission()
+    mission_exec.current_mission = args.mission
+    if args.mission == 'inspection':
+        mission_exec.inspection_mission()
+    elif args.mission == 'flytest':
+        mission_exec.flytest_mission()
+    else:
+        mission_exec.tracking_mission()
     rospy.spin()

@@ -26,18 +26,23 @@ class PlannerInterface(object):
                  names,
                  uav_waypoints,
                  asv_waypoints=list(),
+                 asv_carrier='',
                  update_frequency=10.):
         """
         A Class that interfaces with ROSPlan for dispatching uav actions and
         updating uav knowledge during a mission
         """
+        self.mission = ''
         self.goal_state = list()
+        self.asv_carrier = asv_carrier
         self.waypoints = uav_waypoints
         self.low_battery_mission = False
         self._rate = rospy.Rate(update_frequency)
         self.lowbat = {name: False for name in names}
         self.takeoff_wps = self.get_takeoff_wps(asv_waypoints)
-        self.uavs = [ActionExecutor(name, self.waypoints) for name in names]
+        self.uavs = [
+            ActionExecutor(name, self.waypoints, asv_carrier) for name in names
+        ]
 
         # Rosplan Service proxies
         rospy.loginfo('Waiting for service /rosplan_knowledge_base/update ...')
@@ -92,7 +97,9 @@ class PlannerInterface(object):
             'asv_wp' + str(idx + 1) for idx, val in enumerate(waypoints)
             if bool(val['takeoff'])
         ]
-        if takeoff_wps == []:
+        if self.asv_carrier != '' and takeoff_wps == []:
+            takeoff_wps = ['asv_wp0']
+        elif takeoff_wps == []:
             takeoff_wps = ['uav_wp0']
         return takeoff_wps
 
@@ -103,13 +110,14 @@ class PlannerInterface(object):
         if len(self.uavs) == 1 or all_return:
             self._rate.sleep()
             # Remove current goal
-            update_types = [
-                KnowledgeUpdateServiceRequest.REMOVE_GOAL
-                for _ in self.goal_state[0]
-            ]
-            self.update_predicates(self.goal_state[0], self.goal_state[1],
-                                   update_types)
-            self._rate.sleep()
+            if self.goal_state != list():
+                update_types = [
+                    KnowledgeUpdateServiceRequest.REMOVE_GOAL
+                    for _ in self.goal_state[0]
+                ]
+                self.update_predicates(self.goal_state[0], self.goal_state[1],
+                                       update_types)
+                self._rate.sleep()
             # Add new goal
             pred_names = ['landed', 'at']
             params = [
@@ -127,9 +135,60 @@ class PlannerInterface(object):
             self.update_predicates(pred_names, params, update_types)
             self._rate.sleep()
 
-    def inspection_mission(self):
+    def visit_waypoint_mission(self):
         """
         UAV mission visiting all waypoints and coming back to launch pod
+        """
+        pred_names = ['visited' for wp in self.waypoints]
+        params = [[KeyValue('wp', 'uav_wp%d' % (idx + 1))]
+                  for idx, wp in enumerate(self.waypoints)]
+        update_types = [
+            KnowledgeUpdateServiceRequest.ADD_GOAL for wp in self.waypoints
+        ]
+        # 'all drones must be back goals
+        pred_names.extend(['at' for _ in self.uavs])
+        params.extend(
+            [[KeyValue('v', uav.namespace),
+              KeyValue('wp', 'uav_wp0')] for uav in self.uavs])
+        update_types.extend(
+            [KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.uavs])
+        # 'all drones must be landed' goals
+        pred_names.extend(['landed' for _ in self.uavs])
+        params.extend([[KeyValue('v', uav.namespace)] for uav in self.uavs])
+        update_types.extend(
+            [KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.uavs])
+        self.goal_state = (pred_names, params)
+        succeed = self.update_predicates(pred_names, params, update_types)
+        self._rate.sleep()
+        return succeed
+
+    def tracking_mission(self, vehicle):
+        """
+        UAV tracking a vehicle and coming back to launch pod
+        """
+        pred_names = ['tracked']
+        params = [[KeyValue('v', vehicle)]]
+        update_types = [KnowledgeUpdateServiceRequest.ADD_GOAL]
+        # 'all drones must be back goals
+        pred_names.extend(['at' for _ in self.uavs])
+        params.extend(
+            [[KeyValue('v', uav.namespace),
+              KeyValue('wp', 'uav_wp0')] for uav in self.uavs])
+        update_types.extend(
+            [KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.uavs])
+        # 'all drones must be landed' goals
+        pred_names.extend(['landed' for _ in self.uavs])
+        params.extend([[KeyValue('v', uav.namespace)] for uav in self.uavs])
+        update_types.extend(
+            [KnowledgeUpdateServiceRequest.ADD_GOAL for _ in self.uavs])
+        self.goal_state = (pred_names, params)
+        succeed = self.update_predicates(pred_names, params, update_types)
+        self._rate.sleep()
+        return succeed
+
+    def inspection_mission(self):
+        """
+        UAV mission inspecting a turbine blade
         """
         # 'a drone must do inspect action' goals
         pred_names = ['inspected' for wp in self.waypoints if wp['inspect']]
@@ -139,7 +198,7 @@ class PlannerInterface(object):
             KnowledgeUpdateServiceRequest.ADD_GOAL for wp in self.waypoints
             if wp['inspect']
         ]
-        # 'all drones must be back at home' goals
+        # 'all drones must be back goals
         pred_names.extend(['at' for _ in self.uavs])
         params.extend(
             [[KeyValue('v', uav.namespace),
@@ -273,14 +332,6 @@ class PlannerInterface(object):
                 KeyValue('wp2', 'uav_wp' + str(i[1]))
             ] for i in connections],
             [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE for _ in connections])
-        # add wp connection from takeoff waypoint to home and last wp
-        connections = [(i, 'uav_wp0') for i in self.takeoff_wps
-                       if ('asv' in i)]
-        succeed = self.update_predicates(
-            ['connected' for _ in connections],
-            [[KeyValue('wp1', i[0]),
-              KeyValue('wp2', i[1])] for i in connections],
-            [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE for _ in connections])
         # add home wp position
         succeed = succeed and self.update_predicates(
             ['home'], [[KeyValue('wp', 'uav_wp0')]],
@@ -297,9 +348,9 @@ class PlannerInterface(object):
             ['inspect' for wp in self.waypoints if wp['inspect']],
             [[KeyValue('wp', 'uav_wp%d' % (i + 1))]
              for i, wp in enumerate(self.waypoints) if wp['inspect']], [
-                KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
-                for wp in self.waypoints if wp['inspect']
-            ])
+                 KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
+                 for wp in self.waypoints if wp['inspect']
+             ])
         # add minimum-battery condition
         succeed = succeed and self.update_functions(
             ['minimum-battery'
@@ -346,7 +397,7 @@ class PlannerInterface(object):
                 [min_batt - 0.15],
                 [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             resp = ActionExecutor.ACTION_SUCCESS if (
-                    succeed and self._preflightcheck(preflightcheck)
+                succeed and self._preflightcheck(preflightcheck)
             ) else ActionExecutor.ACTION_FAIL
         except ValueError:
             rospy.logwarn(
@@ -438,7 +489,8 @@ class PlannerInterface(object):
         rospy.loginfo('Dispatching %s action at %s with duration %s ...' %
                       (action_dispatch.name, str(
                           start_time.secs), str(duration.to_sec())))
-        if action_func(*action_params) == ActionExecutor.ACTION_SUCCESS:
+        action_response = action_func(*action_params)
+        if action_response == ActionExecutor.ACTION_SUCCESS:
             if self._apply_operator_effect(action_dispatch.name,
                                            action_dispatch.parameters):
                 self.publish_feedback(action_dispatch.action_id,
@@ -447,6 +499,13 @@ class PlannerInterface(object):
                 self.publish_feedback(action_dispatch.action_id,
                                       'action failed')
         else:
+            if action_response == ActionExecutor.OUT_OF_DURATION:
+                rospy.logwarn(
+                    "Action %s took longer than the allocated duration" %
+                    action_dispatch.name)
+            elif action_response == ActionExecutor.EXTERNAL_INTERVENTION:
+                rospy.logwarn(
+                    "External intervention is detected, cancelling mission!")
             self.publish_feedback(action_dispatch.action_id, 'action failed')
 
     def _dispatch_cb(self, msg):
@@ -470,20 +529,41 @@ class PlannerInterface(object):
                     msg, uav.takeoff,
                     [rospy.get_param('~takeoff_altitude', 10.), duration])
             elif msg.name == 'uav_inspect_blade':
-                # add a state wrapper here? something like (SMACH.START_INSPECT_TURBINE(uav)
-                # this way the state can take advantage of the uav objet which is subscribed to the relevant topics
-                # and can navigate to given coordinates?
-
-                # So Instead of:
                 self._action(msg, uav.inspect_wt, [duration])
-                # It would be something like this:
-                # self._action(msg,SMACH.START_INSPECT_TURBINE,[uav])
-
             elif msg.name == 'uav_goto_waypoint':
                 self._action(msg, self.goto_waypoint,
                              [uav, msg.parameters, duration])
             elif msg.name == 'uav_rtl' or msg.name == 'uav_lowbat_return':
                 self._action(msg, uav.return_to_launch, [True, duration])
+            elif msg.name == 'uav_tracking':
+                self._action(msg, self.tracking_vehicle,
+                             [uav, msg.parameters, duration])
+
+    def tracking_vehicle(self, uav, parameters, duration=rospy.Duration(1, 0)):
+        """
+        Tracking a vehicle by the UAV
+        """
+        return_wp = uav._current_wp if uav._current_wp != -1 else 1
+        target = ""
+        for param in parameters:
+            if param.value != uav.namespace:
+                target = param.value
+                break
+        tracking_duration = rospy.get_param("~tracking_duration", 60.0)
+        follow_duration = rospy.Duration(secs=tracking_duration, nsecs=0)
+        if target != "":
+            mid_duration = rospy.Duration(secs=duration.secs / 2, nsecs=0)
+            response_follow = uav.follow_target(
+                target, False,
+                [0.0, -10.0,
+                 rospy.get_param("~takeoff_altitude", 10.)], follow_duration,
+                mid_duration)
+            response_return = uav.goto(return_wp, mid_duration,
+                                       self.low_battery_mission)
+            response = np.min([response_return, response_follow])
+        else:
+            response = uav.ACTION_FAIL
+        return response
 
     def _landing_update(self):
         """

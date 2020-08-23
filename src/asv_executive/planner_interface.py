@@ -96,13 +96,14 @@ class PlannerInterface(object):
         if len(self.asvs) == 1:
             self._rate.sleep()
             # Remove current goal
-            update_types = [
-                KnowledgeUpdateServiceRequest.REMOVE_GOAL
-                for _ in self.goal_state[0]
-            ]
-            self.update_predicates(self.goal_state[0], self.goal_state[1],
-                                   update_types)
-            self._rate.sleep()
+            if self.goal_state != list():
+                update_types = [
+                    KnowledgeUpdateServiceRequest.REMOVE_GOAL
+                    for _ in self.goal_state[0]
+                ]
+                self.update_predicates(self.goal_state[0], self.goal_state[1],
+                                       update_types)
+                self._rate.sleep()
             # Add new goal
             pred_names = ['at']
             params = [[
@@ -363,7 +364,7 @@ class PlannerInterface(object):
 
     def _action(self, action_dispatch, action_func, action_params=list()):
         """
-        Template asv action to respond to the dispatched action
+        Template uav action to respond to the dispatched action
         """
         self.publish_feedback(action_dispatch.action_id, 'action enabled')
         start_time = rospy.Time(action_dispatch.dispatch_time)
@@ -372,7 +373,8 @@ class PlannerInterface(object):
         rospy.loginfo('Dispatching %s action at %s with duration %s ...' %
                       (action_dispatch.name, str(
                           start_time.secs), str(duration.to_sec())))
-        if action_func(*action_params) == ActionExecutor.ACTION_SUCCESS:
+        action_response = action_func(*action_params)
+        if action_response == ActionExecutor.ACTION_SUCCESS:
             if self._apply_operator_effect(action_dispatch.name,
                                            action_dispatch.parameters):
                 self.publish_feedback(action_dispatch.action_id,
@@ -381,6 +383,13 @@ class PlannerInterface(object):
                 self.publish_feedback(action_dispatch.action_id,
                                       'action failed')
         else:
+            if action_response == ActionExecutor.OUT_OF_DURATION:
+                rospy.logwarn(
+                    "Action %s took longer than the allocated duration" %
+                    action_dispatch.name)
+            elif action_response == ActionExecutor.EXTERNAL_INTERVENTION:
+                rospy.logwarn(
+                    "External intervention is detected, cancelling mission!")
             self.publish_feedback(action_dispatch.action_id, 'action failed')
 
     def _dispatch_cb(self, msg):

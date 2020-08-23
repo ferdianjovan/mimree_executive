@@ -86,14 +86,33 @@ class ActionExecutor(object):
                 for uav in uavs
             }
             self.uav_home_wp = {uav: HomePosition() for uav in uavs}
-            self._uav_home_dist = {uav: float('inf') for uav in uavs}
+            self._uav_home_offset = {
+                uav: np.ones(4) * float('inf')
+                for uav in uavs
+            }
+            self._uav_home_pose_pub = {
+                uav:
+                rospy.Publisher('/%s_launchpad/mavros/global_position/global' %
+                                uav.namespace,
+                                NavSatFix,
+                                queue_size=10)
+                for uav in uavs
+            }
+            self._uav_home_heading_pub = {
+                uav: rospy.Publisher(
+                    '/%s_launchpad/mavros/global_position/compass_hdg' %
+                    uav.namespace,
+                    Float64,
+                    queue_size=10)
+                for uav in uavs
+            }
             for uav in uavs:
                 rospy.Subscriber('/%s/mavros/home_position/home' %
                                  uav.namespace,
                                  HomePosition,
                                  lambda i: self._uav_home_cb(i, uav),
                                  queue_size=10)
-            rospy.Timer(20 * self._rate.sleep_dur, self.update_uav_home_pos)
+            rospy.Timer(2 * self._rate.sleep_dur, self.update_uav_home_pos)
 
         # Subscribers
         rospy.Subscriber('/%s/mavros/state' % self.namespace,
@@ -138,6 +157,7 @@ class ActionExecutor(object):
         # change mode just to fill self.current_mode and self.previous_mode
         self.guided_mode()
         # Adding initial waypoints' configuration
+        self.set_current_location_as_home()
         while not self.add_waypoints():
             self._rate.sleep()
 
@@ -208,24 +228,42 @@ class ActionExecutor(object):
         for uav in self._uav_home_proxies.keys():
             home_wp = np.array([
                 self.uav_home_wp[uav].geo.latitude,
-                self.uav_home_wp[uav].geo.longitude
+                self.uav_home_wp[uav].geo.longitude,
+                self.uav_home_wp[uav].geo.altitude, self.heading
             ])
-            if self._uav_home_dist[uav] == float('inf'):
+            if (self._uav_home_offset[uav] == np.ones(4) * float('inf')).all():
                 if self.global_pose != NavSatFix():
                     asv_home = np.array([
-                        self.global_pose.latitude, self.global_pose.longitude
+                        self.global_pose.latitude, self.global_pose.longitude,
+                        self.global_pose.altitude, 0.0
                     ])
-                    self._uav_home_dist[uav] = np.linalg.norm(home_wp -
-                                                              asv_home)
+                    self._uav_home_offset[uav] = home_wp - asv_home
                 continue
-            landpad_lat = self.global_pose.latitude - self._uav_home_dist[
-                uav] * np.cos(self.heading)
-            landpad_long = self.global_pose.longitude - self._uav_home_dist[
-                uav] * np.sin(self.heading)
-            landpad = np.array([landpad_lat, landpad_long])
-            if np.linalg.norm(home_wp - landpad) > 1e-06:
-                self._uav_home_proxies[uav](False, landpad_lat, landpad_long,
-                                            2.1)
+            # Update the launchpad position relative to last known pos
+            heading = (self.heading - self._uav_home_offset[uav][-1])
+            launchpad_lat = self.global_pose.latitude + (
+                -1 * self._uav_home_offset[uav][1] * np.sin(heading) +
+                self._uav_home_offset[uav][0] * np.cos(heading))
+            launchpad_long = self.global_pose.longitude + (
+                self._uav_home_offset[uav][1] * np.cos(heading) +
+                self._uav_home_offset[uav][0] * np.sin(heading))
+            launchpad_alt = self.global_pose.altitude + self._uav_home_offset[
+                uav][2]
+            # Publish the launchpad position and its (asv) heading
+            launchpad_pose = NavSatFix()
+            launchpad_pose.header = self.global_pose.header
+            launchpad_pose.status = self.global_pose.status
+            launchpad_pose.latitude = launchpad_lat
+            launchpad_pose.longitude = launchpad_long
+            launchpad_pose.altitude = launchpad_alt
+            self._uav_home_pose_pub[uav].publish(launchpad_pose)
+            self._uav_home_heading_pub[uav].publish(
+                Float64(self.heading * 180. / np.pi))
+            launchpad = np.array([launchpad_lat, launchpad_long])
+            if np.linalg.norm(home_wp[:2] - launchpad) > 3e-06:
+                self._uav_home_proxies[uav](False, self.heading * 180. / np.pi,
+                                            launchpad_lat, launchpad_long,
+                                            self._uav_home_offset[uav][2])
 
     def update_wp_position(self, event):
         """
@@ -263,10 +301,6 @@ class ActionExecutor(object):
         """
         Setting up waypoints for the ASV
         """
-        while self.home.header == Header() and (not rospy.is_shutdown()):
-            rospy.logwarn(
-                'Home has not been set! Setting current location as home.')
-            self.set_current_location_as_home()
         # Clear current wps available
         self._clear_wp_proxy()
         # First wp is home with landing action
@@ -308,41 +342,35 @@ class ActionExecutor(object):
         """
         Set current location as the new home location
         """
-        response = self._set_home_proxy(True, 0., 0., 0.)
-        if response.success:
-            rospy.loginfo(
-                'Setting current location of %s as the new home ...' %
-                self.namespace)
-        else:
-            rospy.logwarn('%s can not set current location as the new home!' %
-                          self.namespace)
-        return response.success
+        response = False
+        while (not response) and (not rospy.is_shutdown()):
+            response = self._set_home_proxy(True, 0., 0., 0., 0.).success
+            self._rate.sleep()
+        if response:
+            rospy.loginfo('Setting current location as the new home ...')
+        return response
 
     def guided_mode(self, duration=rospy.Duration(60, 0), mode='guided'):
         """
         Guided mode action
         """
         start = rospy.Time.now()
-        guided = False
-        if self.state.mode != mode.upper():
-            while (rospy.Time.now() - start <
-                   duration) and (not rospy.is_shutdown()) and (
-                       not guided) and (not self.external_intervened):
-                guided = self._set_mode_proxy(0, mode).mode_sent
-                if guided:
-                    self.previous_mode = self.current_mode
-                    self.current_mode = mode.upper()
-                self._rate.sleep()
-            rospy.loginfo('ASV changes its mode to %s ...' % mode.upper())
-        else:
+        while (rospy.Time.now() - start <
+               duration) and (not rospy.is_shutdown()) and (
+                   self.state.mode !=
+                   mode.upper()) and (not self.external_intervened):
+            self._set_mode_proxy(0, mode)
+            self._rate.sleep()
+        rospy.loginfo('ASV changes its mode to %s ...' % mode.upper())
+        if self.state.mode == mode.upper():
             self.previous_mode = self.current_mode
             self.current_mode = mode.upper()
-            guided = True
+        response = int(self.state.mode == mode.upper())
         if (rospy.Time.now() - start) > duration:
-            guided = self.OUT_OF_DURATION
+            response = self.OUT_OF_DURATION
         if self.external_intervened:
-            guided = self.EXTERNAL_INTERVENTION
-        return int(guided)
+            response = self.EXTERNAL_INTERVENTION
+        return response
 
     def arm(self, duration=rospy.Duration(60, 0)):
         """

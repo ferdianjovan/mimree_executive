@@ -36,6 +36,7 @@
         (at ?v - vehicle ?wp - waypoint)
         (visited ?wp - waypoint)
         (connected ?wp1 - waypoint ?wp2 - waypoint)
+        (tracked ?v - vehicle)
     )
 
     ;; ASV ACTIONS
@@ -180,6 +181,20 @@
             (at start (not (at ?v ?from)))
             (at end (at ?v ?to))
             (at end (visited ?to))
+            (decrease (battery-amount ?v) (* 0.0001 #t))
+        )
+    )
+
+    (:durative-action uav_tracking
+        :parameters (?v - uav ?vo - vehicle)
+        :duration (= ?duration 600)
+        :condition (and
+            (over all (armed ?v))
+            (over all (airborne ?v))
+            (over all (preflightchecked ?v))
+        )
+        :effect (and
+            (at end (tracked ?vo))
             (decrease (battery-amount ?v) (* 0.0001 #t))
         )
     )

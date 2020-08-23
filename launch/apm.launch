@@ -6,9 +6,11 @@
 	<arg name="uav_url" default="udp://127.0.0.1:14551@127.0.0.1:14555" />
 	<arg name="uav_gcs_url" default="" />
 	<arg name="asv_url" default="udp://127.0.0.1:14560@127.0.0.1:14565" />
+    <arg name="uav_system_id" default="1"/>
+    <arg name="asv_system_id" default="1"/>
 
     <group ns="hector">
-        <arg name="tgt_system" default="1" />
+        <arg name="tgt_system" default="$(arg uav_system_id)" />
         <arg name="tgt_component" default="1" />
 
         <include file="$(find mavros)/launch/node.launch">
@@ -22,7 +24,7 @@
     </group>
 
     <group ns="halcyon" if="$(arg use_asv)">
-        <arg name="tgt_system" default="1" />
+        <arg name="tgt_system" default="$(arg asv_system_id)" />
         <arg name="tgt_component" default="1" />
 
         <include file="$(find mavros)/launch/node.launch">
