@@ -64,6 +64,8 @@ class MissionExec(object):
                       self.resume_plan)
         rospy.Service('%s/return_home' % rospy.get_name(), Empty,
                       self.return_home_mission)
+        rospy.Service('%s/cancel_plan' % rospy.get_name(), Empty,
+                      self.cancel_plan)
         # Auto call functions
         rospy.Timer(50 * self._rate.sleep_dur, self.low_battery_replan)
 
@@ -113,15 +115,17 @@ class MissionExec(object):
         rospy.Timer(self._rate.sleep_dur, self.execute, oneshot=True)
         return list()
 
-    def cancel_plan(self):
+    def cancel_plan(self, req):
         """
         Function to cancel all plan across assets
         """
         self._cancel_plan_proxy()
+        rospy.loginfo("Cancelling the mission as requested...")
         if self.uav_exec is not None:
             self.uav_exec.cancel_plan()
         if self.asv_exec is not None:
             self.asv_exec.cancel_plan()
+        return list()
 
     def inspection_mission(self, full=False):
         """
@@ -179,7 +183,7 @@ class MissionExec(object):
             self.asv_exec.low_fuel_return_mission()
             self.asv_exec.low_fuel_mission = True
         self._knowledge_update_proxy(self.metric_optimization)
-        self.cancel_plan()
+        self.cancel_plan(req)
         rospy.sleep(4 * self._rate.sleep_dur)
         achieved = self.execute()
         if self.uav_exec is not None:
@@ -207,7 +211,9 @@ class MissionExec(object):
             self.asv_exec.low_fuel_mission = True
             replan = True
         if replan:
-            self.cancel_plan()
+            rospy.logwarn(
+                "Battery / Fuel of one of assets is below threshold!")
+            self.cancel_plan(event)
             rospy.sleep(4 * self._rate.sleep_dur)
             self._knowledge_update_proxy(self.metric_optimization)
             achieved = self.execute()

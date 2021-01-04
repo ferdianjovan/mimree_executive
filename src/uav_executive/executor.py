@@ -445,35 +445,31 @@ class ActionExecutor(object):
              waypoint,
              duration=rospy.Duration(60, 0),
              low_battery_trip=False):
-        """
-        Go to specific waypoint action
-        """
-        self.wp_reached = -1
+        wp = self.waypoints[waypoint]
+        target = GlobalPositionTarget()
+        target.header.seq = 1
+        target.header.stamp = rospy.Time.now()
+        target.header.frame_id = 'map'
+        target.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
+        # this type of masking will ignore accel and veloci
+        target.type_mask = 0b001111111000
+        target.latitude = wp.x_lat
+        target.longitude = wp.y_long
+        target.altitude = wp.z_alt
+        target.yaw = yaw_ned_to_enu(wp.param4)
+        target.yaw_rate = 2.0
         start = rospy.Time.now()
-        if not self.set_current_target_wp(waypoint):
-            return self.ACTION_FAIL
-        self.guided_mode(duration, mode='auto')
-        duration = duration - (rospy.Time.now() - start)
-        start = rospy.Time.now()
-        while (rospy.Time.now() - start < duration) and not (
-                rospy.is_shutdown()) and (not self.external_intervened) and (
-                    (waypoint != self.wp_reached)):
-            if not low_battery_trip and self.low_battery:
-                rospy.logwarn('Battery is below minimum voltage!')
-                break
-            self._rate.sleep()
-        duration = duration - (rospy.Time.now() - start)
-        start = rospy.Time.now()
-        response = int(waypoint == self.wp_reached)
-        if not (self.low_battery or self.external_intervened):
-            self.guided_mode(duration=duration)
-        if (rospy.Time.now() - start) > duration:
-            response = self.OUT_OF_DURATION
-        elif self.external_intervened:
-            response = self.EXTERNAL_INTERVENTION
+        response = self.goto_coordinate(target, low_battery_trip, duration)
+        if response == self.ACTION_SUCCESS:
+            duration = duration - (rospy.Time.now() - start)
+            # rospy.loginfo(min(duration, rospy.Duration(wp.param1)).secs)
+            rospy.sleep(min(duration, rospy.Duration(wp.param1)))
         return response
 
-    def goto_coordinate(self, target, duration=rospy.Duration(60, 0)):
+    def goto_coordinate(self,
+                        target,
+                        low_battery_trip=False,
+                        duration=rospy.Duration(60, 0)):
         """
         Go to specific global coordinate action
         """
@@ -485,7 +481,7 @@ class ActionExecutor(object):
         while (rospy.Time.now() - start <
                duration) and not (rospy.is_shutdown()) and (
                    not self.external_intervened) and (not reached):
-            if self.low_battery:
+            if not low_battery_trip and self.low_battery:
                 rospy.logwarn('Battery is below minimum voltage!')
                 break
             target.header.stamp = rospy.Time.now()
@@ -652,7 +648,7 @@ class ActionExecutor(object):
             target.header.seq = 1
             target.header.stamp = rospy.Time.now()
             target.header.frame_id = 'map'
-            target.type_mask = GlobalPositionTarget.IGNORE_AFZ
+            target.type_mask = 0b001111111000
             target.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
             # Due to yaw_ned_to_enu conversion, the sin and cos are flipped
             target.latitude = latitude + latitude_offset
@@ -669,12 +665,6 @@ class ActionExecutor(object):
             target.altitude = target_alt
             target.yaw = yaw_ned_to_enu(heading)
             target.yaw_rate = 2.0
-            target.velocity.x = 0.1
-            target.velocity.y = 0.1
-            target.velocity.z = 0.1
-            target.acceleration_or_force.x = 0.1
-            target.acceleration_or_force.y = 0.1
-            target.acceleration_or_force.z = 0.1
             # Publish aimed position
             self._setpoint_pub.publish(target)
             # Check uav position with target
@@ -792,35 +782,33 @@ class ActionExecutor(object):
         """
         start = rospy.Time.now()
         # position where drone is originated in one of the wps
+        wp = self.waypoints[self._current_wp]
         original = GlobalPositionTarget()
+        original.header.seq = 1
+        original.header.stamp = rospy.Time.now()
+        original.header.frame_id = 'map'
         original.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
-        original.type_mask = GlobalPositionTarget.IGNORE_AFZ
-        original.latitude = self.global_pose.latitude
-        original.longitude = self.global_pose.longitude
-        original.altitude = self._rel_alt[-1]
-        original.yaw = yaw_ned_to_enu(self.heading)
+        original.type_mask = 0b001111111000
+        original.latitude = wp.x_lat
+        original.longitude = wp.y_long
+        original.altitude = wp.z_alt
+        original.yaw = yaw_ned_to_enu(wp.param4)
         original.yaw_rate = 2.0
-        original.velocity.x = 0.1
-        original.velocity.y = 0.1
-        original.velocity.z = 0.1
-        original.acceleration_or_force.x = 0.01
-        original.acceleration_or_force.y = 0.01
-        original.acceleration_or_force.z = 0.01
         rospy.loginfo("Scan first blade...")
         first_blade = self.blade_inspect(original, original.altitude,
-                                         [0.000, 0.0006, 0.0000], duration)
+                                         [30.0, 0.0, 0.0], duration)
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
         rospy.loginfo("Scan second blade...")
         second_blade = self.blade_inspect(original, original.altitude, [
-            0.000, 0.0006 * np.cos(138. / 180.0 * np.pi),
+            30.0 * np.cos(138. / 180.0 * np.pi), 0.000,
             85.6 * np.sin(120. / 180.0 * np.pi)
         ], duration)
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
         rospy.loginfo("Scan third blade...")
         third_blade = self.blade_inspect(original, original.altitude, [
-            0.000, 0.0006 * np.cos(234. / 180.0 * np.pi),
+            30.0 * np.cos(234. / 180.0 * np.pi), 0.000,
             85.6 * np.sin(240. / 180.0 * np.pi)
         ], duration)
         rospy.loginfo("Inspection is done...")
@@ -839,30 +827,23 @@ class ActionExecutor(object):
         reached_original = self.ACTION_FAIL
         # position where drone is supposed to be
         heading = self.heading
-        latitude = self.global_pose.latitude + (
-            target_position[0] * np.cos(heading) +
-            target_position[1] * np.sin(heading))
-        longitude = self.global_pose.longitude + (
-            target_position[0] * np.sin(heading) +
-            target_position[1] * np.cos(heading))
-        altitude = self.rel_alt + target_position[2]
+        offset_x = (target_position[0] * np.cos(heading) +
+                    target_position[1] * np.sin(heading))
+        offset_y = (-1 * target_position[0] * np.sin(heading) +
+                    target_position[1] * np.cos(heading))
+        latitude_offset, longitude_offset = xy_to_longlat(
+            offset_x, offset_y, self.global_pose.latitude)
         target = GlobalPositionTarget()
         target.header.seq = 1
         target.header.stamp = rospy.Time.now()
         target.header.frame_id = 'map'
         target.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
-        target.type_mask = GlobalPositionTarget.IGNORE_AFZ
-        target.latitude = latitude
-        target.longitude = longitude
-        target.altitude = altitude
+        target.type_mask = 0b001111111000
+        target.latitude = self.global_pose.latitude + latitude_offset
+        target.longitude = self.global_pose.longitude + longitude_offset
+        target.altitude = self.rel_alt + target_position[2]
         target.yaw = yaw_ned_to_enu(heading)
         target.yaw_rate = 2.0
-        target.velocity.x = 0.1
-        target.velocity.y = 0.1
-        target.velocity.z = 0.1
-        target.acceleration_or_force.x = 0.01
-        target.acceleration_or_force.y = 0.01
-        target.acceleration_or_force.z = 0.01
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
         reached_target = self.goto_coordinate(target, duration)

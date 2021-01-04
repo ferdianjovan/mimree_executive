@@ -2,12 +2,10 @@
   uavs: 
     - hector
   uav_waypoints:
-      # - {hold_time: 2.0, radius: 1.0, yaw: 0.0, lat: 51.423332, long: -2.671666, rel_alt:  20.0, inspect: False}
-      # - {hold_time: 2.0, radius: 1.0, yaw: 0.0, lat: 51.423301, long: -2.671593, rel_alt:  20.0, inspect: False}
       - {hold_time: 2.0, radius: 1.0, yaw: 0.0, lat: 51.423577, long: -2.670798, rel_alt:  15.0, inspect: False}
   asvs:
     - halcyon
   uav_carrier: halcyon
   asv_waypoints:
     - {hold_time: 2.0, radius: 2.0, yaw: 0.0, lat: 51.423366, long: -2.671206, takeoff: False}
-    - {hold_time: 2.0, radius: 2.0, yaw: 0.0, lat: 51.423319, long: -2.671582, takeoff: True}
+    - {hold_time: 2.0, radius: 2.0, yaw: 0.0, lat: 51.423319, long: -2.671582, takeoff: False}
