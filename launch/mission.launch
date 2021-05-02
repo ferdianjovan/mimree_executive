@@ -3,19 +3,19 @@
 
     <arg name="config_file" default="wp_config_simulation.yaml"/>
     <arg name="mission_configuration" default="mangalia"/>
-    <arg name="mission" default="inspection"/>
+    <arg name="mission" default="[WT1,irr,WT2,asv,WT3,uav,WT4,uav]"/>
     <arg name="landing_approach" default="behind"/>
     <arg name="dist_initial_landing" default="-5.0"/>
     <arg name="altitude_initial_landing" default="10.0"/>
     <arg name="takeoff_altitude" default="10.0"/>
-    <arg name="tracking_duration" default="30.0"/>
+    <arg name="scenario_type" default="simulation"/>
 
     <node name="mission_executive" pkg="mimree_executive" type="mission_executor.py" respawn="false" output="screen" args="-f $(arg config_file) -c $(arg mission_configuration) -m $(arg mission)">
+        <param name="scenario_type" value="$(arg scenario_type)" type="string"/>
         <param name="takeoff_altitude" value="$(arg takeoff_altitude)" type="double"/>
         <param name="landing_approach" value="$(arg landing_approach)" type="string"/>
         <param name="dist_initial_landing" value="$(arg dist_initial_landing)" type="double"/>
         <param name="altitude_initial_landing" value="$(arg altitude_initial_landing)" type="double"/>
-        <param name="tracking_duration" value="$(arg tracking_duration)" type="double"/>
     </node>
 
 </launch>

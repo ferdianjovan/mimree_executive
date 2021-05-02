@@ -9,37 +9,42 @@ import rospy
 # 3rd Party Packages
 import yaml
 from asv_executive.planner_interface import PlannerInterface as PIASV
-from diagnostic_msgs.msg import KeyValue
 from rosplan_dispatch_msgs.srv import DispatchService, DispatchServiceResponse
-from rosplan_knowledge_msgs.msg import DomainFormula, ExprBase, KnowledgeItem
+from rosplan_knowledge_msgs.msg import ExprBase, KnowledgeItem
 from rosplan_knowledge_msgs.srv import (KnowledgeUpdateService,
                                         KnowledgeUpdateServiceRequest)
+from rosplan_dispatch_msgs.msg import ActionFeedback
 from std_srvs.srv import Empty
 from uav_executive.planner_interface import PlannerInterface as PIUAV
+from irr_executive.planner_interface import PlannerInterface as PIIRR
 
 
 class MissionExec(object):
     def __init__(self, filename, configname, update_frequency=2.):
-        self.current_mission = ''
+        self.current_mission = {'uav': list(), 'asv': list(), 'irr': list()}
         self._rate = rospy.Rate(update_frequency)
         config = self.load_mission_config_file(filename, configname)
-        self.metric_optimization = self._get_metric_optimisation(config)
+        self.metric_optimization = self._get_metric_optimisation()
+        # ASV planner
+        if len(config['asvs']) and len(config['asv_waypoints']):
+            self.asv_exec = PIASV(config['asvs'], config['asv_waypoints'],
+                                  config['asv_waypoint_connection'],
+                                  config['asv_waypoint_to_wt'])
+        else:
+            self.asv_exec = None
         # UAV planner
         if len(config['uavs']) and len(config['uav_waypoints']):
             self.uav_exec = PIUAV(config['uavs'], config['uav_waypoints'],
-                                  config['asv_waypoints'],
-                                  config['uav_carrier'])
+                                  config['uav_waypoint_connection'],
+                                  config['uav_waypoint_to_wt'])
         else:
             self.uav_exec = None
-        # ASV planner
-        if len(config['asvs']) and len(config['asv_waypoints']):
-            uavs = list()
-            if self.uav_exec is not None:
-                uavs = self.uav_exec.uavs
-            self.asv_exec = PIASV(config['asvs'], config['asv_waypoints'],
-                                  uavs, config['uav_carrier'])
+        if len(config['irrs']) and len(config['irr_waypoints']):
+            self.irr_exec = PIIRR(config['irrs'], config['irr_waypoints'],
+                                  config['irr_waypoint_connection'],
+                                  config['irr_waypoint_to_wt'])
         else:
-            self.asv_exec = None
+            self.irr_exec = None
         # Service proxies
         rospy.loginfo('Waiting for rosplan services...')
         rospy.wait_for_service(
@@ -66,32 +71,33 @@ class MissionExec(object):
                       self.return_home_mission)
         rospy.Service('%s/cancel_plan' % rospy.get_name(), Empty,
                       self.cancel_plan)
+        # Subscriber
+        rospy.Subscriber('/rosplan_plan_dispatcher/action_feedback',
+                         ActionFeedback,
+                         self._feedback_cb,
+                         queue_size=2)
         # Auto call functions
         rospy.Timer(50 * self._rate.sleep_dur, self.low_battery_replan)
 
-    def _get_metric_optimisation(self, config):
+    def _feedback_cb(self, msg):
+        """
+        Monitor action feedback
+        """
+        if msg.status == 'action out of duration':
+            self.cancel_plan(Empty())
+            self.resume_plan(Empty())
+
+    def _get_metric_optimisation(self):
+        """
+        Optimising generated plan to focus on minimizing total time
+        """
         request = KnowledgeUpdateServiceRequest()
         request.update_type = KnowledgeUpdateServiceRequest.ADD_METRIC
         request.knowledge.knowledge_type = KnowledgeItem.EXPRESSION
-        if (len(config['uavs']) + len(config['asvs'])) > 1:
-            request.knowledge.optimization = "maximize"
-            request.knowledge.expr.tokens.append(
-                ExprBase(expr_type=ExprBase.OPERATOR, op=ExprBase.ADD))
-            for name in config['uavs']:
-                function = DomainFormula('battery-amount',
-                                         [KeyValue('v', name)])
-                request.knowledge.expr.tokens.append(
-                    ExprBase(expr_type=ExprBase.FUNCTION, function=function))
-            for name in config['asvs']:
-                function = DomainFormula('fuel-percentage',
-                                         [KeyValue('v', name)])
-                request.knowledge.expr.tokens.append(
-                    ExprBase(expr_type=ExprBase.FUNCTION, function=function))
-        else:
-            request.knowledge.optimization = "minimize"
-            request.knowledge.expr.tokens.append(
-                ExprBase(expr_type=ExprBase.SPECIAL,
-                         special_type=ExprBase.TOTAL_TIME))
+        request.knowledge.optimization = "minimize"
+        request.knowledge.expr.tokens.append(
+            ExprBase(expr_type=ExprBase.SPECIAL,
+                     special_type=ExprBase.TOTAL_TIME))
         return request
 
     def load_mission_config_file(self, filename, configname):
@@ -104,132 +110,49 @@ class MissionExec(object):
         config = [i for i in configs if i['config'] == configname][0]
         return config
 
-    def resume_plan(self, req):
+    def add_mission(self, mission):
         """
-        Function to flag down external intervention, and replan
+        Adding missions based on the type of vehicle executing them
         """
+        mission = mission.replace("[", "").replace("]", "").replace(" ", "")
+        mission = mission.split(",")
+        self.current_mission = {
+            'uav': [
+                val for idx, val in enumerate(mission[:-1])
+                if idx % 2 == 0 and mission[idx + 1] == 'uav'
+            ],
+            'asv': [
+                val for idx, val in enumerate(mission[:-1])
+                if idx % 2 == 0 and mission[idx + 1] == 'asv'
+            ],
+            'irr': [
+                val for idx, val in enumerate(mission[:-1])
+                if idx % 2 == 0 and mission[idx + 1] == 'irr'
+            ]
+        }
+        succeed = True
         if self.uav_exec is not None:
-            self.uav_exec.resume_plan()
+            succeed = succeed and self.uav_exec.add_mission(
+                self.current_mission['uav'], self.current_mission['irr'])
         if self.asv_exec is not None:
-            self.asv_exec.resume_plan()
-        rospy.Timer(self._rate.sleep_dur, self.execute, oneshot=True)
-        return list()
+            succeed = succeed and self.asv_exec.add_mission(
+                self.current_mission['asv'])
+        if self.irr_exec is not None:
+            succeed = succeed and self.irr_exec.add_mission(
+                self.current_mission['irr'])
+        return succeed
 
-    def cancel_plan(self, req):
-        """
-        Function to cancel all plan across assets
-        """
-        self._cancel_plan_proxy()
-        rospy.loginfo("Cancelling the mission as requested...")
-        if self.uav_exec is not None:
-            self.uav_exec.cancel_plan()
-        if self.asv_exec is not None:
-            self.asv_exec.cancel_plan()
-        return list()
-
-    def inspection_mission(self, full=False):
-        """
-        Inspection mission
-        """
-        if self.uav_exec is not None:
-            self.uav_exec.mission = self.current_mission
-            self.uav_exec.inspection_mission()
-            if self.asv_exec is not None and not full:
-                self.asv_exec.deploy_retrieve_mission()
-            elif self.asv_exec is not None and full:
-                self.asv_exec.inspection_mission()
-            self._knowledge_update_proxy(self.metric_optimization)
-            self.execute()
-        if self.asv_exec is not None and self.uav_exec is None:
-            self.asv_exec.inspection_mission()
-            self._knowledge_update_proxy(self.metric_optimization)
-            self.execute()
-
-    def flytest_mission(self):
-        """
-        Landing on a moving boat
-        """
-        if self.uav_exec is not None:
-            self.uav_exec.mission = self.current_mission
-            self.uav_exec.visit_waypoint_mission()
-            self._knowledge_update_proxy(self.metric_optimization)
-            self.execute()
-        else:
-            rospy.logerr("There is no UAV to run a mission!")
-
-    def tracking_mission(self):
-        """
-        Tracking a moving boat
-        """
-        if self.uav_exec is not None:
-            self.uav_exec.mission = self.current_mission
-            self.uav_exec.tracking_mission(self.uav_exec.uavs[-1].asv_carrier)
-            self._knowledge_update_proxy(self.metric_optimization)
-            self.execute()
-        else:
-            rospy.logerr("There is no UAV to run a mission!")
-
-    def return_home_mission(self, req):
-        """
-        Mission to return home
-        """
-        self.current_mission = 'return'
-        if self.uav_exec is not None:
-            self.uav_exec.low_battery_return_mission(all_return=False)
-            self.uav_exec.low_battery_mission = True
-        if self.asv_exec is not None:
-            if self.uav_exec is not None:
-                self.uav_exec.low_battery_return_mission(all_return=True)
-            self.asv_exec.low_fuel_return_mission()
-            self.asv_exec.low_fuel_mission = True
-        self._knowledge_update_proxy(self.metric_optimization)
-        self.cancel_plan(req)
-        rospy.sleep(4 * self._rate.sleep_dur)
-        achieved = self.execute()
-        if self.uav_exec is not None:
-            self.uav_exec.low_battery_mission = not achieved
-        if self.asv_exec is not None:
-            self.asv_exec.low_fuel_mission = not achieved
-        return list()
-
-    def low_battery_replan(self, event=True):
-        """
-        Assets return home due to low battery voltage
-        """
-        replan = False
-        self.current_mission = 'return'
-        if self.uav_exec is not None and True in self.uav_exec.lowbat.values():
-            self.uav_exec.low_battery_return_mission(all_return=False)
-            self.uav_exec.low_battery_mission = True
-            replan = True
-        if self.asv_exec is not None and True in self.asv_exec.lowfuel.values(
-        ):
-            if self.uav_exec is not None and self.asv_exec.lowfuel[
-                    self.asv_exec.uav_carrier]:
-                self.uav_exec.low_battery_return_mission(all_return=True)
-            self.asv_exec.low_fuel_return_mission()
-            self.asv_exec.low_fuel_mission = True
-            replan = True
-        if replan:
-            rospy.logwarn(
-                "Battery / Fuel of one of assets is below threshold!")
-            self.cancel_plan(event)
-            rospy.sleep(4 * self._rate.sleep_dur)
-            self._knowledge_update_proxy(self.metric_optimization)
-            achieved = self.execute()
-            if self.uav_exec is not None:
-                self.uav_exec.low_battery_mission = not achieved
-            if self.asv_exec is not None:
-                self.asv_exec.low_fuel_mission = not achieved
-
-    def execute(self, event=True):
+    def launch(self, event=True):
         """
         Execute plan using ROSPlan
         """
+        self._knowledge_update_proxy(self.metric_optimization)
         if self.uav_exec is not None:
             self.uav_exec.resume_plan()
         if self.asv_exec is not None:
             self.asv_exec.resume_plan()
+        if self.irr_exec is not None:
+            self.irr_exec.resume_plan()
         response = DispatchServiceResponse()
         for _ in range(3):
             try:
@@ -246,11 +169,102 @@ class MissionExec(object):
                 break
             except rospy.service.ServiceException:
                 continue
+            self._rate.sleep()
         if response.goal_achieved:
             rospy.loginfo('Mission Succeed')
         else:
             rospy.loginfo('Mission Failed')
         return response.goal_achieved
+
+    def resume_plan(self, req):
+        """
+        Function to flag down external intervention, and replan
+        """
+        if self.uav_exec is not None:
+            self.uav_exec.resume_plan()
+        if self.asv_exec is not None:
+            self.asv_exec.resume_plan()
+        if self.irr_exec is not None:
+            self.irr_exec.resume_plan()
+        rospy.Timer(self._rate.sleep_dur, self.launch, oneshot=True)
+        return list()
+
+    def cancel_plan(self, req):
+        """
+        Function to cancel all plan across assets
+        """
+        self._cancel_plan_proxy()
+        rospy.loginfo("Cancelling the mission as requested...")
+        if self.uav_exec is not None:
+            self.uav_exec.cancel_plan()
+        if self.asv_exec is not None:
+            self.asv_exec.cancel_plan()
+        if self.irr_exec is not None:
+            self.irr_exec.cancel_plan()
+        return list()
+
+    def return_home_mission(self, req):
+        """
+        Mission to return home
+        """
+        self.current_mission = {
+            'uav': ['home'],
+            'asv': ['home'],
+            'irr': ['home']
+        }
+        if self.uav_exec is not None:
+            self.uav_exec.clear_mission()
+            self.uav_exec.home_mission()
+        if self.asv_exec is not None:
+            self.asv_exec.clear_mission()
+            self.asv_exec.home_mission()
+        if self.irr_exec is not None:
+            self.irr_exec.clear_mission()
+            self.irr_exec.home_mission()
+        self.cancel_plan(req)
+        rospy.sleep(4 * self._rate.sleep_dur)
+        self.launch()
+        return list()
+
+    def low_battery_replan(self, event=True):
+        """
+        Assets return home due to low battery voltage
+        """
+        replan = False
+        if self.irr_exec is not None:
+            if {True, False} == set(self.irr_exec.lowfuel.values()):
+                replan = True
+            elif True in self.irr_exec.lowfuel.values():
+                self.irr_exec.clear_mission()
+                self.irr_exec.home_mission()
+        if (self.uav_exec is not None):
+            if {True, False} == set(self.uav_exec.lowbat.values()):
+                replan = True
+            elif True in self.uav_exec.lowbat.values():
+                self.uav_exec.clear_mission()
+                self.uav_exec.home_mission()
+                if self.irr_exec is not None:
+                    self.irr_exec.clear_mission()
+                    self.irr_exec.home_mission()
+                replan = True
+        if self.asv_exec is not None:
+            if {True, False} == set(self.asv_exec.lowfuel.values()):
+                replan = True
+            elif True in self.asv_exec.lowfuel.values():
+                self.asv_exec.clear_mission()
+                self.asv_exec.home_mission()
+                if self.uav_exec is not None:
+                    self.uav_exec.clear_mission()
+                    self.uav_exec.home_mission()
+                if self.irr_exec is not None:
+                    self.irr_exec.clear_mission()
+                    self.irr_exec.home_mission()
+                replan = True
+        if replan:
+            rospy.logwarn("Battery / Fuel of one of assets is low!")
+            self.cancel_plan(event)
+            rospy.sleep(4 * self._rate.sleep_dur)
+            self.launch()
 
 
 if __name__ == '__main__':
@@ -264,18 +278,12 @@ if __name__ == '__main__':
                             dest='config_mission',
                             default='mangalia',
                             help='Mission configuration')
-    parser_arg.add_argument(
-        '-m',
-        dest='mission',
-        default='inspection',
-        help="Mission Type [inspection | flytest | tracking]")
+    parser_arg.add_argument('-m',
+                            dest='mission',
+                            default='[WT1,irr,WT2,asv,WT3,uav,WT4,uav]',
+                            help="format: [WT[1|2|3|4],[irr|asv|uav]]")
     args = parser_arg.parse_args(sys.argv[1:7])
     mission_exec = MissionExec(args.config_file, args.config_mission)
-    mission_exec.current_mission = args.mission
-    if args.mission == 'inspection':
-        mission_exec.inspection_mission()
-    elif args.mission == 'flytest':
-        mission_exec.flytest_mission()
-    else:
-        mission_exec.tracking_mission()
+    if mission_exec.add_mission(args.mission):
+        mission_exec.launch()
     rospy.spin()

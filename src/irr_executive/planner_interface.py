@@ -6,7 +6,7 @@ from threading import Lock
 
 # ROS Packages
 import rospy
-from asv_executive.executor import ActionExecutor
+from irr_executive.executor import ActionExecutor
 from diagnostic_msgs.msg import KeyValue
 from rosplan_dispatch_msgs.msg import ActionDispatch, ActionFeedback
 from rosplan_knowledge_msgs.msg import KnowledgeItem
@@ -24,23 +24,24 @@ class PlannerInterface(object):
 
     def __init__(self,
                  names,
-                 asv_waypoints,
+                 irr_waypoints,
                  connections,
                  wt_to_wp,
                  update_frequency=10.):
         """
-        A Class that interfaces with ROSPlan for dispatching asv actions and
-        updating asv knowledge during a mission
+        A Class that interfaces with ROSPlan for dispatching irr actions and
+        updating irr knowledge during a mission
         """
         self.action_sequence = 0
         self.wt_to_wp = wt_to_wp
+        self.waypoints = irr_waypoints
         self.connections = connections
         self.dispatch_actions = list()
-        self.total_wp = len(asv_waypoints)
+        self.total_wp = len(irr_waypoints)
         self.goal_state = [list(), list()]
         self._rate = rospy.Rate(update_frequency)
         self.lowfuel = {name['name']: False for name in names}
-        self.asvs = [ActionExecutor(name, asv_waypoints) for name in names]
+        self.irrs = [ActionExecutor(name, irr_waypoints) for name in names]
 
         # Rosplan Service proxies
         rospy.loginfo('Waiting for service /rosplan_knowledge_base/update ...')
@@ -80,14 +81,12 @@ class PlannerInterface(object):
             queue_size=10)
 
         if not self.set_instances():
-            rospy.logerr('ASV instances in PDDL can\'t be set!')
-        if not self.set_init(names, asv_waypoints, connections):
-            rospy.logerr('ASV initial state can\'t be set!')
+            rospy.logerr('IRR instances in PDDL can\'t be set!')
+        if not self.set_init(names, irr_waypoints, connections):
+            rospy.logerr('IRR initial state can\'t be set!')
         # Auto call functions
-        rospy.Timer(self._rate.sleep_dur, self._wp_update)
-        rospy.Timer(10 * self._rate.sleep_dur, self._fuel_update)
         rospy.Timer(self._rate.sleep_dur, self._execute_action)
-        rospy.sleep(20 * self._rate.sleep_dur)
+        self._rate.sleep()
 
     def _feedback_cb(self, msg):
         """
@@ -163,63 +162,6 @@ class PlannerInterface(object):
                 "External intervention is detected, cancelling mission!")
             self.publish_feedback(action_dispatch.action_id, 'action failed')
 
-    def _fuel_update(self, event):
-        """
-        Update fuel value on ROSPlan knowledge base
-        """
-        for asv in self.asvs:
-            # fuel status update
-            self.update_functions(
-                ['fuel'], [[KeyValue('v', asv.namespace)]], [asv.fuel], [
-                    KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
-                ])
-            self.lowfuel[asv.namespace] = asv.low_fuel
-
-    def _wp_update(self, event):
-        """
-        Add or remove waypoint facts on ROSPlan knowledge base
-        """
-        wp_asv = list()
-        params = list()
-        pred_names = list()
-        update_types = list()
-        attributes = self._proposition_proxy('at').attributes
-        for attribute in attributes:
-            name = attribute.values[0].value
-            asv = [i for i in self.asvs if i.namespace == name]
-            if len(asv):
-                wp_asv.append(name)
-                at = int(re.findall(r'\d+', attribute.values[1].value)[0])
-                if asv[0]._current_wp != -1 and at != asv[0]._current_wp:
-                    # add current wp that asv resides
-                    pred_names.append('at')
-                    params.append([
-                        KeyValue('v', asv[0].namespace),
-                        KeyValue('wp', 'asv_wp%d' % asv[0]._current_wp)
-                    ])
-                    update_types.append(
-                        KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
-                    # remove previous wp that asv resided
-                    pred_names.append('at')
-                    params.append([
-                        KeyValue('v', asv[0].namespace),
-                        KeyValue('wp', 'asv_wp%d' % at)
-                    ])
-                    update_types.append(
-                        KnowledgeUpdateServiceRequest.REMOVE_KNOWLEDGE)
-        for asv in self.asvs:
-            if not (asv.namespace in wp_asv) and asv._current_wp != -1:
-                # add current wp that asv resides
-                pred_names.append('at')
-                params.append([
-                    KeyValue('v', asv.namespace),
-                    KeyValue('wp', 'asv_wp%d' % asv._current_wp)
-                ])
-                update_types.append(
-                    KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
-        if pred_names != list():
-            self.update_predicates(pred_names, params, update_types)
-
     def publish_feedback(self, action_id, fbstatus):
         """
         Function to publish action feedback to action_feedback topic
@@ -231,136 +173,142 @@ class PlannerInterface(object):
 
     def set_instances(self):
         """
-        Set initial instances for ASVs to ROSPlan
+        Set initial instances for IRRs to ROSPlan
         """
         ins_types = list()
         ins_names = list()
         update_types = list()
         for idx in range(self.total_wp + 1):
             ins_types.append('waypoint')
-            ins_names.append('asv_wp' + str(idx))
+            ins_names.append('irr_wp' + str(idx))
             update_types.append(KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
-        for asv in self.asvs:
-            ins_types.append('asv')
-            ins_names.append(asv.namespace)
+        for irr in self.irrs:
+            ins_types.append('irr')
+            ins_names.append(irr.namespace)
             update_types.append(KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
         return self.update_instances(ins_types, ins_names, update_types)
 
-    def set_init(self, asvs, waypoints, connections):
+    def set_init(self, irrs, waypoints, connections):
         """
         Adding facts to the initial state
         """
-        succeed = True
+        # adding landing_post and takeoff_post facts
+        succeed = self.update_predicates(
+            ['deploy_retrieve_post'], [[KeyValue('wp', 'irr_wp0')]],
+            [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
         connections.extend([[j, i, k, l] for i, j, k, l in connections
                             if i != j])
         for i in connections:
             # add wp connection
             succeed = succeed and self.update_predicates(['connected'], [[
-                KeyValue('wp1', 'asv_wp' + str(i[0])),
-                KeyValue('wp2', 'asv_wp' + str(i[1]))
+                KeyValue('wp1', 'irr_wp' + str(i[0])),
+                KeyValue('wp2', 'irr_wp' + str(i[1]))
             ]], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             # add min action duration on the wp connection
             succeed = succeed and self.update_functions(['min_dur'], [[
-                KeyValue('wp1', 'asv_wp' + str(i[0])),
-                KeyValue('wp2', 'asv_wp' + str(i[1]))
+                KeyValue('wp1', 'irr_wp' + str(i[0])),
+                KeyValue('wp2', 'irr_wp' + str(i[1]))
             ]], [norm.ppf(0.05, loc=float(i[2]), scale=float(i[3]))
                  ], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             # add max action duration on the wp connection
             succeed = succeed and self.update_functions(['max_dur'], [[
-                KeyValue('wp1', 'asv_wp' + str(i[0])),
-                KeyValue('wp2', 'asv_wp' + str(i[1]))
+                KeyValue('wp1', 'irr_wp' + str(i[0])),
+                KeyValue('wp2', 'irr_wp' + str(i[1]))
             ]], [norm.ppf(0.95, loc=float(i[2]), scale=float(i[3]))
                  ], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
-        # add ASV waypoints for UAV to take-off
+        # add IRR waypoints for UAV to take-off
         for idx, val in enumerate(waypoints):
-            if val['takeoff']:
+            if val['repair']:
+                succeed = succeed and self.update_predicates(['repair_post'], [
+                    [KeyValue('wp', 'irr_wp' + str(idx + 1))]
+                ], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
+            if val['inspect']:
                 succeed = succeed and self.update_predicates(
-                    ['takeoff_post'],
-                    [[KeyValue('wp', 'asv_wp' + str(idx + 1))]],
+                    ['ndt_post'], [[KeyValue('wp', 'irr_wp' + str(idx + 1))]],
                     [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
-                succeed = succeed and self.update_predicates(['connected'], [[
-                    KeyValue('wp1', 'asv_wp' + str(idx + 1)),
-                    KeyValue('wp2', 'uav_wp0')
-                ]], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
-                for uav_wp_id in val['uav_wp']:
-                    succeed = succeed and self.update_predicates(
-                        ['connected'], [[
-                            KeyValue('wp1', 'asv_wp' + str(idx + 1)),
-                            KeyValue('wp2', 'uav_wp' + str(uav_wp_id))
-                        ]], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
-        # add ASV features
-        for asv in asvs:
-            if asv['lr_camera_system']:
+        # add IRR features
+        for irr in irrs:
+            succeed = succeed and self.update_predicates(
+                ['idle'], [[KeyValue('v', irr['name'])]],
+                [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
+            if irr['ndt_system']:
                 succeed = succeed and self.update_predicates(
-                    ['has_lr_camera'], [[KeyValue('v', asv['name'])]],
+                    ['has_ndt_system'], [[KeyValue('v', irr['name'])]],
                     [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
-            if asv['charging_dock'] and len(asv['uav_onboard']) > 0:
+            if irr['repair_arm']:
                 succeed = succeed and self.update_predicates(
-                    ['has_charging_dock', 'charging_post'],
-                    [[KeyValue('asv', asv['name'])],
-                     [KeyValue('wp', 'uav_wp0')]], [
-                         KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
-                         KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
-                     ])
-            for uav in asv['uav_onboard']:
-                succeed = succeed and self.update_predicates(['has_uav'], [[
-                    KeyValue('asv', asv['name']),
-                    KeyValue('uav', uav)
-                ]], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
+                    ['has_repair_arm'], [[KeyValue('v', irr['name'])]],
+                    [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             # add fuel, min, max condition
             succeed = succeed and self.update_functions(
-                ['min_fuel'], [[KeyValue('v', asv['name'])]],
-                [float(asv['min_fuel'])],
+                ['min_fuel'], [[KeyValue('v', irr['name'])]],
+                [float(irr['min_fuel'])],
                 [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             succeed = succeed and self.update_functions(
-                ['max_fuel'], [[KeyValue('v', asv['name'])]],
-                [float(asv['max_fuel'])],
+                ['max_fuel'], [[KeyValue('v', irr['name'])]],
+                [float(irr['max_fuel'])],
                 [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             succeed = succeed and self.update_functions(
-                ['fuel'], [[KeyValue('v', asv['name'])]],
-                [float(asv['max_fuel'])],
+                ['fuel'], [[KeyValue('v', irr['name'])]],
+                [float(irr['max_fuel'])],
                 [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             succeed = succeed and self.update_functions(
-                ['consumption_rate'], [[KeyValue('v', asv['name'])]], [
+                ['consumption_rate'], [[KeyValue('v', irr['name'])]], [
                     norm.ppf(0.95,
-                             loc=asv['fuel_rate'][0],
-                             scale=asv['fuel_rate'][1])
+                             loc=irr['fuel_rate'][0],
+                             scale=irr['fuel_rate'][1])
                 ], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
         return succeed
 
     def add_mission(self, WTs):
         """
-        Add (inspection) missions for ASVs to do
+        Add (inspection) missions for IRRs to do
         """
         params = list()
         pred_names = list()
         update_types = list()
-        inspect_wps = ['asv_wp' + str(self.wt_to_wp[wt]) for wt in WTs]
-        for wp in inspect_wps:
-            pred_names.append('turbine_inspected_at')
-            params.append([KeyValue('wp', wp)])
-            update_types.append(KnowledgeUpdateServiceRequest.ADD_GOAL)
-            pred_names.append('inspect_post')
-            params.append([KeyValue('wp', wp)])
-            update_types.append(KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE)
+        wps = [self.wt_to_wp[wt] for wt in WTs]
+        for wp in wps:
+            if self.waypoints[wp - 1]['repair']:
+                pred_names.append('turbine_repaired_at')
+                params.append([KeyValue('wp', 'irr_wp' + str(wp))])
+                update_types.append(KnowledgeUpdateServiceRequest.ADD_GOAL)
+            if self.waypoints[wp - 1]['inspect']:
+                pred_names.append('turbine_nd_tested_at')
+                params.append([KeyValue('wp', 'irr_wp' + str(wp))])
+                update_types.append(KnowledgeUpdateServiceRequest.ADD_GOAL)
+        if "retrieve" in rospy.get_param("~scenario_type", "simulation"):
+            for irr in self.irrs:
+                pred_names.extend(['at', 'detached'])
+                params.extend(
+                    [[KeyValue('v', irr.namespace),
+                      KeyValue('wp', 'irr_wp0')],
+                     [KeyValue('v', irr.namespace)]])
+                update_types.extend([
+                    KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE,
+                    KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE
+                ])
         self.goal_state[0].extend(pred_names)
         self.goal_state[1].extend(params)
         succeed = self.update_predicates(pred_names, params, update_types)
-        succeed = succeed and self.home_mission()
+        if "deploy" not in rospy.get_param("~scenario_type", "simulation"):
+            succeed = succeed and self.home_mission()
         return succeed
 
     def home_mission(self):
         """
-        Returning ASVs to the dock/home mission
+        Returning IRRs to the dock/home mission
         """
         params = list()
         pred_names = list()
         update_types = list()
-        for asv in self.asvs:
-            pred_names.append('at')
-            params.append(
-                [KeyValue('v', asv.namespace),
-                 KeyValue('wp', 'asv_wp0')])
+        attributes = self._proposition_proxy('has_retrieval_system').attributes
+        for idx, attribute in enumerate(attributes):
+            pred_names.append('attached_to')
+            params.append([
+                KeyValue('irr', self.irrs[idx].namespace),
+                KeyValue('uav', attribute.values[0].value)
+            ])
             update_types.append(KnowledgeUpdateServiceRequest.ADD_GOAL)
         self.goal_state[0].extend(pred_names)
         self.goal_state[1].extend(params)
@@ -405,19 +353,17 @@ class PlannerInterface(object):
         Function to resume ongoing plan
         """
         self.action_sequence = 0
-        for asv in self.asvs:
-            asv.previous_mode = asv.current_mode
-            asv.current_mode = asv.state.mode
-            asv.external_intervened = False
-            asv._cancel_action = False
+        for irr in self.irrs:
+            irr.external_intervened = False
+            irr._cancel_action = False
 
     def cancel_plan(self):
         """
         Function to cancel current plan
         """
         self.action_sequence = 0
-        for asv in self.asvs:
-            asv._cancel_action = True
+        for irr in self.irrs:
+            irr._cancel_action = True
 
     def update_instances(self, ins_types, ins_names, update_types):
         """
@@ -433,26 +379,9 @@ class PlannerInterface(object):
             success = success and self._knowledge_update_proxy(req).success
         return success
 
-    def goto_waypoint(self, asv, params, dur=rospy.Duration(60, 0)):
-        """
-        Go to waypoint action for ASV
-        """
-        waypoint = -1
-        for param in params:
-            if param.key == 'to':
-                waypoint = int(re.findall(r'\d+', param.value)[0])
-                break
-        if waypoint == 0:
-            response = asv.return_to_launch(dur)
-        elif waypoint == -1:
-            response = ActionExecutor.ACTION_FAIL
-        else:
-            response = asv.goto(waypoint, dur, asv.low_fuel)
-        return response
-
     def clear_mission(self):
         """
-        Clear ASV related goals
+        Clear IRR related goals
         """
         if self.goal_state[0] != list():
             update_types = [
@@ -481,25 +410,43 @@ class PlannerInterface(object):
             duration = self.get_max_action_duration(msg.parameters,
                                                     msg.duration)
             # parse action message
-            asv_names = [asv.namespace for asv in self.asvs]
-            asv_name = [
+            irr_names = [irr.namespace for irr in self.irrs]
+            irr_name = [
                 parm.value for parm in msg.parameters
-                if parm.value in asv_names
+                if parm.value in irr_names
             ]
-            if len(asv_name):
-                asv = [i for i in self.asvs if i.namespace == asv_name[0]][0]
+            if len(irr_name):
+                irr = [i for i in self.irrs if i.namespace == irr_name[0]][0]
                 start = rospy.Time.now()
-                if msg.name == 'asv_navigate':
-                    self._action(msg, self.goto_waypoint,
-                                 [asv, msg.parameters, duration])
-                elif msg.name == 'asv_inspect_wt':
-                    self._action(msg, asv.inspect_wt, [duration])
+                if msg.name == 'irr_navigate':
+                    self._action(msg, irr.navigate, [duration])
+                elif msg.name == 'uav_retrieve_irr':
+                    self.irr_retrieval(msg, irr, duration)
+                elif msg.name in ['irr_ndt_inspect', 'irr_repair_wt']:
+                    self._action(msg, irr.rotate, [180., duration])
                 self.update_action_duration(rospy.Time.now() - start,
                                             msg.parameters)
+                self.update_predicates(
+                    ['idle'], [[KeyValue('v', irr.namespace)]],
+                    [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             msg_executed = True
             break
         if msg_executed:
             del self.dispatch_actions[idx]
+
+    def irr_retrieval(self, action_dispatch, irr, duration):
+        """
+        IRR retrieval response and coordination
+        """
+        action_response = irr.prepare_for_retrieval(duration)
+        if action_response == ActionExecutor.ACTION_SUCCESS:
+            self.publish_feedback(action_dispatch.action_id, 'OLAM prepared')
+        else:
+            if action_response == ActionExecutor.OUT_OF_DURATION:
+                rospy.logwarn(
+                    "OLAM action %s took longer than the allocated duration" %
+                    action_dispatch.name)
+            self.publish_feedback(action_dispatch.action_id, 'OLAM failed')
 
     def get_max_action_duration(self, parameters, duration):
         """
@@ -507,7 +454,7 @@ class PlannerInterface(object):
         """
         wps = [
             int(re.findall(r'\d+', param.value)[0]) for param in parameters
-            if 'asv' in param.value
+            if 'irr' in param.value
         ]
         wps = [wps[0], wps[0]] if len(wps) == 1 else wps
         try:
@@ -530,7 +477,7 @@ class PlannerInterface(object):
         x = float("%d.%d" % (duration.secs, duration.nsecs))
         wps = [
             int(re.findall(r'\d+', param.value)[0]) for param in parameters
-            if 'asv' in param.value
+            if 'irr' in param.value
         ]
         wps = [wps[0], wps[0]] if len(wps) == 1 else wps
         idx, conn = [(idx, i) for idx, i in enumerate(self.connections)

@@ -6,7 +6,7 @@ plugin_blacklist:
 - hil
 # extras
 - altitude
-- debug_value
+# - debug_value
 - image_pub
 - px4flow
 - vibration

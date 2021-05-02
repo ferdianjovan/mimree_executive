@@ -1,4 +1,4 @@
-(define (domain mimree_mission)
+(define (domain om_wind_turbines)
 
     (:requirements 
         :strips
@@ -7,235 +7,287 @@
         :fluents
         :durative-actions
         :continuous-effects
+        :duration-inequalities
 		:universal-preconditions
+        :disjunctive-preconditions
     )
 
     (:types
         waypoint vehicle - object
-        uav asv - vehicle
-        uav_waypoint asv_waypoint - waypoint
-    )
-
-    (:functions
-        (minimum-fuel ?v - vehicle)
-        (fuel-percentage ?v - vehicle)
-        (battery-amount ?v - vehicle)
-        (minimum-battery ?v - vehicle)
+        uav asv irr - vehicle
     )
 
     (:predicates
-        (carrier ?v - asv)
-        (landed ?v - uav)
-        (airborne ?v - uav)
-        (armed ?v - vehicle)
-        (home ?wp - waypoint)
-        (takeoff ?wp - waypoint)
-        (inspect ?wp - waypoint)
-        (inspected ?wp - waypoint)
-        (preflightchecked ?v - uav)
+        ;; ==================== Gen Predicates ====================
+        (idle ?v - vehicle)
+        (inspect_post ?wp - waypoint)
         (at ?v - vehicle ?wp - waypoint)
-        (visited ?wp - waypoint)
-        (connected ?wp1 - waypoint ?wp2 - waypoint)
-        (tracked ?v - vehicle)
+        (connected ?wp1 ?wp2 - waypoint)
+        (turbine_inspected_at ?wp - waypoint)
+        ;; ==================== USV Predicates ====================
+        (has_lr_camera ?v - asv)
+        (has_uav ?asv - asv ?uav - uav)
+        (has_charging_dock ?asv - asv)
+        ;; ==================== UAV Predicates ====================
+        (ground ?v - uav)
+        (airborne ?v - uav)
+        (has_camera ?v - uav)
+        (has_deploy_system ?v - uav)
+        (landing_post ?wp - waypoint)
+        (takeoff_post ?wp - waypoint)
+        (charging_post ?wp - waypoint)
+        (has_retrieval_system ?v - uav)
+        (tookoff_from ?v - uav ?wp - waypoint)
+        ;; ==================== IRR Predicates ====================
+        (detached ?v - irr)
+        (attached_to ?irr - irr ?uav - uav)
+        (ndt_post ?wp - waypoint)
+        (has_ndt_system ?v - irr)
+        (has_repair_arm ?v - irr)
+        (repair_post ?wp - waypoint)
+        (turbine_repaired_at ?wp - waypoint)
+        (turbine_nd_tested_at ?wp - waypoint)
+        (deploy_retrieve_post ?wp - waypoint)
     )
 
-    ;; ASV ACTIONS
-    (:durative-action asv_request_arm
-        :parameters (?v - asv)
-        :duration (= ?duration 180)
-        :condition (and
-            (at start (> (fuel-percentage ?v) (minimum-fuel ?v)))
-        )
-        :effect (and (at end (armed ?v)))
+    (:functions
+        ;; ==================== Gen Functions ====================
+        (fuel ?v - vehicle)
+        (min_fuel ?v - vehicle)
+        (max_fuel ?v - vehicle)
+        (min_dur ?wp1 ?wp2 - waypoint)
+        (max_dur ?wp1 ?wp2 - waypoint)
+        (consumption_rate ?v - vehicle)
     )
 
-    (:durative-action asv_goto_waypoint
-        :parameters (?v - asv ?from ?to - asv_waypoint)
-        :duration (= ?duration 600)
-        :condition (and
-            (at start (at ?v ?from))
-			(over all (forall (?drone - uav) (airborne ?drone)))
-            (over all (connected ?from ?to))
-            (over all (armed ?v))
-        )
-        :effect (and
-            (at start (not (at ?v ?from)))
-            (at end (at ?v ?to))
-            (at end (visited ?to))
-            (decrease (fuel-percentage ?v) (* 0.01 #t))
-        )
-    )
-
-    (:durative-action asv_goto_waypoint_with_uav
-        :parameters (?boat - asv ?drone - uav ?from ?to - asv_waypoint)
-        :duration (= ?duration 600)
-        :condition (and
-            (at start (at ?boat ?from))
-            (at start (at ?drone ?from))
-            (over all (connected ?from ?to))
-            (over all (armed ?boat))
-            (over all (landed ?drone))
-            (over all (carrier ?boat))
-        )
-        :effect (and
-            (at start (not (at ?boat ?from)))
-            (at start (not (at ?drone ?from)))
-            (at end (at ?boat ?to))
-            (at end (at ?drone ?to))
-            (at end (visited ?to))
-            (decrease (fuel-percentage ?boat) (* 0.01 #t))
-        )
-    )
-
-    (:durative-action asv_rtl
-        :parameters (?v - asv ?from ?to - asv_waypoint)
-        :duration (= ?duration 540)
+    ;; ==================== ASV Actions ====================
+    (:durative-action asv_navigate
+        :parameters (?v - asv ?from ?to - waypoint)
+        :duration (and (>= ?duration (min_dur ?from ?to)) (<= ?duration (max_dur ?from ?to)))
         :condition (and
             (at start (at ?v ?from))
-            (over all (home ?to))
-            (over all (armed ?v))
             (over all (connected ?from ?to))
+            (at start (> (fuel ?v) (min_fuel ?v)))
         )
-        :effect (and 
+        :effect (and
             (at end (at ?v ?to))
-            (at end (visited ?to))
             (at start (not (at ?v ?from)))
-            (decrease (fuel-percentage ?v) (* 0.01 #t))
+            (decrease (fuel ?v) (* (consumption_rate ?v) #t))
         )
     )
 
-    (:durative-action asv_rtl_with_uav
-        :parameters (?boat - asv ?drone - uav ?from ?to - asv_waypoint)
-        :duration (= ?duration 540)
+    (:durative-action asv_inspect_wt
+        :parameters (?v - asv ?wp - waypoint)
+        :duration (and (>= ?duration (min_dur ?wp ?wp)) (<= ?duration (max_dur ?wp ?wp)))
         :condition (and
-            (at start (at ?boat ?from))
-            (at start (at ?drone ?from))
-            (over all (landed ?drone))
-            (over all (home ?to))
-            (over all (armed ?boat))
-            (over all (carrier ?boat))
-            (over all (connected ?from ?to))
+            (over all (at ?v ?wp))
+            (over all (inspect_post ?wp))
+            (over all (has_lr_camera ?v))
         )
-        :effect (and 
-            (at end (at ?boat ?to))
-            (at end (at ?drone ?to))
-            (at end (visited ?to))
-            (at start (not (at ?boat ?from)))
-            (at start (not (at ?drone ?from)))
-            (decrease (fuel-percentage ?boat) (* 0.01 #t))
+        :effect (and
+            (at end (turbine_inspected_at ?wp))
         )
     )
 
-    ;; UAV ACTIONS
-    (:durative-action uav_preflightcheck
-        :parameters  (?v - uav ?wp - waypoint)
-        :duration (= ?duration 180)
-        :condition (and
-            (over all (landed ?v))
-            (over all (at ?v ?wp))
-            (over all (takeoff ?wp))
-        )
-        :effect (and (at end (preflightchecked ?v)))
-    )
-
-    (:durative-action uav_request_arm
-        :parameters (?v - uav ?wp - waypoint)
-        :duration (= ?duration 180)
-        :condition (and 
-            (over all (at ?v ?wp))
-            (over all (takeoff ?wp))
-            (over all (landed ?v))
-            (over all (preflightchecked ?v))
-        )
-        :effect (and (at end (armed ?v)))
-    )   
-
+    ;; ==================== UAV Actions ====================
     (:durative-action uav_takeoff
-        :parameters (?v - uav ?from - waypoint)
-        :duration (= ?duration 120)
+        :parameters (?v - uav ?wp - waypoint)
+        :duration (and (>= ?duration (min_dur ?wp ?wp)) (<= ?duration (max_dur ?wp ?wp)))
         :condition (and 
-            (at start (landed ?v))
-            (over all (at ?v ?from))
-            (over all (armed ?v))
-            (over all (takeoff ?from))
-            (over all (preflightchecked ?v))
+            (at start (idle ?v))
+            (at start (ground ?v))
+            (over all (takeoff_post ?wp))
+            (at start (> (fuel ?v) (min_fuel ?v)))
+            (over all (forall (?asv - asv) (imply (has_uav ?asv ?v) (at ?asv ?wp))))
         )
         :effect (and 
-            (at start (not (landed ?v)))
+            (at end (idle ?v))
             (at end (airborne ?v))
-            (decrease (battery-amount ?v) (* 0.0001 #t))
+            (at start (not (idle ?v)))
+            (at start (not (ground ?v)))
+            (at end (tookoff_from ?v ?wp))
+            (decrease (fuel ?v) (* (consumption_rate ?v) #t))
         )
     )
 
-    (:durative-action uav_goto_waypoint
-        :parameters (?v - uav ?from - waypoint ?to - uav_waypoint)
-        :duration (= ?duration 600)
+    (:durative-action uav_land
+        :parameters (?v - uav ?from ?to - waypoint) 
+        :duration (and (>= ?duration (min_dur ?from ?from)) (<= ?duration (max_dur ?from ?from)))
         :condition (and
+            (at start (idle ?v))
+            (at start (airborne ?v))
+            (over all (at ?v ?from))
+            (over all (landing_post ?from))
+            (at start (tookoff_from ?v ?to))
+            (at start (> (fuel ?v) (min_fuel ?v)))
+            (over all (forall (?asv - asv) (imply (has_uav ?asv ?v) (at ?asv ?to))))
+        )
+        :effect (and
+            (at end (idle ?v))
+            (at end (ground ?v))
+            (at start (not (idle ?v)))
+            (at start (not (airborne ?v)))
+            (at start (not (tookoff_from ?v ?to)))
+            (decrease (fuel ?v) (* (consumption_rate ?v) #t))
+        )
+    )
+
+    (:durative-action uav_navigate
+        :parameters (?v - uav ?from ?to ?takeoff - waypoint)
+        :duration (and (>= ?duration (min_dur ?from ?to)) (<= ?duration (max_dur ?from ?to)))
+        :condition (and
+            (at start (idle ?v))
             (at start (at ?v ?from))
-            (over all (armed ?v))
             (over all (airborne ?v))
             (over all (connected ?from ?to))
-            (over all (preflightchecked ?v))
+            (over all (connected ?takeoff ?to))
+            (over all (tookoff_from ?v ?takeoff))
+            (at start (> (fuel ?v) (min_fuel ?v)))
         )
         :effect (and
-            (at start (not (at ?v ?from)))
+            (at end (idle ?v))
             (at end (at ?v ?to))
-            (at end (visited ?to))
-            (decrease (battery-amount ?v) (* 0.0001 #t))
-        )
-    )
-
-    (:durative-action uav_tracking
-        :parameters (?v - uav ?vo - vehicle)
-        :duration (= ?duration 600)
-        :condition (and
-            (over all (armed ?v))
-            (over all (airborne ?v))
-            (over all (preflightchecked ?v))
-        )
-        :effect (and
-            (at end (tracked ?vo))
-            (decrease (battery-amount ?v) (* 0.0001 #t))
+            (at start (not (idle ?v)))
+            (at start (not (at ?v ?from)))
+            (decrease (fuel ?v) (* (consumption_rate ?v) #t))
         )
     )
 
     (:durative-action uav_inspect_blade
-        :parameters (?v - uav ?from - waypoint)
-        :duration (= ?duration 900)
+        :parameters (?v - uav ?wp - waypoint)
+        :duration (and (>= ?duration (min_dur ?wp ?wp)) (<= ?duration (max_dur ?wp ?wp)))
         :condition (and
-            (at start (at ?v ?from))
-            (at start (> (battery-amount ?v) (minimum-battery ?v)))
-            (over all (armed ?v))
+            (at start (idle ?v))
+            (over all (at ?v ?wp))
             (over all (airborne ?v))
-            (over all (inspect ?from))
-            (over all (preflightchecked ?v))
+            (over all (has_camera ?v))
+            (over all (inspect_post ?wp))
+            (at start (> (fuel ?v) (min_fuel ?v)))
         )
         :effect (and
-            (at start (not (at ?v ?from)))
-            (at end (at ?v ?from))
-            (at end (inspected ?from))
-            (decrease (battery-amount ?v) (* 0.0001 #t))
+            (at end (idle ?v))
+            (at start (not (idle ?v)))
+            (at end (turbine_inspected_at ?wp))
+            (decrease (fuel ?v) (* (consumption_rate ?v) #t))
         )
     )
 
-    (:durative-action uav_rtl
-        :parameters (?v - uav ?from ?to - uav_waypoint)
-        :duration (= ?duration 540)
+    (:durative-action uav_deploy_irr
+        :parameters (?uav - uav ?irr - irr ?uav_wp ?irr_wp - waypoint)
+        :duration (and (>= ?duration (min_dur ?uav_wp ?uav_wp)) (<= ?duration (max_dur ?uav_wp ?uav_wp)))
         :condition (and
-            (at start (airborne ?v))
-            (at start (at ?v ?from))
-            (over all (home ?to))
-            (over all (armed ?v))
-            (over all (connected ?from ?to))
-            (over all (preflightchecked ?v))
+            (at start (idle ?uav))
+            (over all (idle ?irr))
+            (over all (airborne ?uav))
+            (over all (at ?uav ?uav_wp))
+            (at start (attached_to ?irr ?uav))
+            (over all (has_deploy_system ?uav))
+            (over all (deploy_retrieve_post ?uav_wp))
+            (over all (deploy_retrieve_post ?irr_wp))
+            (at start (> (fuel ?uav) (min_fuel ?uav)))
         )
-        :effect (and 
-            (at end (landed ?v))
-            (at end (at ?v ?to))
-            (at end (visited ?to))
-            (at start (not (at ?v ?from)))
-            (at start (not (airborne ?v)))
-            (decrease (battery-amount ?v) (* 0.0001 #t))
+        :effect (and
+            (at end (idle ?uav))
+            (at end (detached ?irr))
+            (at end (at ?irr ?irr_wp))
+            (at start (not (idle ?uav)))
+            (at start (not (attached_to ?irr ?uav)))
+            (decrease (fuel ?uav) (* (consumption_rate ?uav) #t))
         )
     )
+
+    (:durative-action uav_retrieve_irr
+        :parameters (?uav - uav ?irr - irr ?uav_wp ?irr_wp - waypoint)
+        :duration (and (>= ?duration (min_dur ?uav_wp ?uav_wp)) (<= ?duration (max_dur ?uav_wp ?uav_wp)))
+        :condition (and
+            (at start (idle ?uav))
+            (over all (idle ?irr))
+            (at start (detached ?irr))
+            (over all (airborne ?uav))
+            (over all (at ?uav ?uav_wp))
+            (at start (at ?irr ?irr_wp))
+            (over all (has_retrieval_system ?uav))
+            (over all (deploy_retrieve_post ?uav_wp))
+            (over all (deploy_retrieve_post ?irr_wp))
+            (at start (> (fuel ?uav) (min_fuel ?uav)))
+        )
+        :effect (and
+            (at end (idle ?uav))
+            (at start (not (idle ?uav)))
+            (at end (attached_to ?irr ?uav))
+            (at start (not (detached ?irr)))
+            (at start (not (at ?irr ?irr_wp)))
+            (decrease (fuel ?uav) (* (consumption_rate ?uav) #t))
+        )
+    )
+
+    (:durative-action uav_refuelling
+        :parameters (?uav - uav ?asv - asv ?wp - waypoint)
+        ;; :duration (= ?duration 3.0)
+        :duration (= ?duration (/ (- (max_fuel ?uav) (fuel ?uav)) (consumption_rate ?uav)))
+        :condition (and
+            (over all (ground ?uav))
+            (over all (at ?uav ?wp))
+            (over all (charging_post ?wp))
+            (over all (has_uav ?asv ?uav))
+            (over all (has_charging_dock ?asv))
+            (at start (< (fuel ?uav) (max_fuel ?uav)))
+        )
+        :effect (and
+            (at end (assign (fuel ?uav) (max_fuel ?uav))) 
+        )
+    )
+        
+    ;; ==================== IRR Actions ====================
+    (:durative-action irr_navigate
+        :parameters (?v - irr ?from ?to - waypoint)
+        :duration (and (>= ?duration (min_dur ?from ?to)) (<= ?duration (max_dur ?from ?to)))
+        :condition (and
+            (at start (at ?v ?from))
+            (over all (connected ?from ?to))
+            (at start (> (fuel ?v) (min_fuel ?v)))
+        )
+        :effect (and
+            (at end (at ?v ?to))
+            (at start (not (at ?v ?from)))
+            (decrease (fuel ?v) (* (consumption_rate ?v) #t))
+        )
+    )
+
+    (:durative-action irr_ndt_inspect
+        :parameters (?v - irr ?wp - waypoint)
+        :duration (and (>= ?duration (min_dur ?wp ?wp)) (<= ?duration (max_dur ?wp ?wp)))
+        :condition (and
+            (at start (idle ?v))
+            (over all (at ?v ?wp))
+            (over all (ndt_post ?wp))
+            (over all (has_ndt_system ?v))
+            (at start (> (fuel ?v) (min_fuel ?v)))
+        )
+        :effect (and
+            (at end (idle ?v))
+            (at start (not (idle ?v)))
+            (at end (turbine_nd_tested_at ?wp))
+            (decrease (fuel ?v) (* (consumption_rate ?v) #t))
+        )
+    )
+
+    (:durative-action irr_repair_wt
+        :parameters (?v - irr ?wp - waypoint)
+        :duration (and (>= ?duration (min_dur ?wp ?wp)) (<= ?duration (max_dur ?wp ?wp)))
+        :condition (and
+            (at start (idle ?v))
+            (over all (at ?v ?wp))
+            (over all (repair_post ?wp))
+            (over all (has_repair_arm ?v))
+            (at start (> (fuel ?v) (min_fuel ?v)))
+        )
+        :effect (and
+            (at end (idle ?v))
+            (at start (not (idle ?v)))
+            (at end (turbine_repaired_at ?wp))
+            (decrease (fuel ?v) (* (consumption_rate ?v) #t))
+        )
+    )
+
 )

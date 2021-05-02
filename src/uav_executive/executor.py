@@ -3,14 +3,12 @@
 import numpy as np
 import rospy
 import tf
-from geometry_msgs.msg import PoseStamped
-from mavros_msgs.msg import (GlobalPositionTarget, HomePosition, State,
-                             StatusText, Waypoint, WaypointReached)
-from mavros_msgs.srv import (CommandBool, CommandHome, CommandLong, CommandTOL,
-                             SetMode, WaypointClear, WaypointPush,
-                             WaypointSetCurrent)
+from geometry_msgs.msg import PoseArray, PoseStamped
+from mavros_msgs.msg import GlobalPositionTarget, HomePosition, State
+from mavros_msgs.srv import CommandHome, CommandTOL, SetMode
 from sensor_msgs.msg import BatteryState, NavSatFix, Range
-from std_msgs.msg import Float64, Header
+from std_msgs.msg import Float64, Header, String
+from uav_executive.lhm_executor import ActionExecutor as LHMExecutor
 
 
 def yaw_ned_to_enu(radian):
@@ -43,6 +41,7 @@ def xy_to_longlat(x, y, latitude):
 
 
 class ActionExecutor(object):
+
     MINIMUM_VOLTAGE = 12.19
     MINIMUM_ALTITUDE = 0.5
     INIT_VOLTAGE = 12.587
@@ -51,144 +50,141 @@ class ActionExecutor(object):
     ACTION_SUCCESS = 1
     ACTION_FAIL = 0
 
-    def __init__(self,
-                 namespace,
-                 waypoints,
-                 asv_carrier='',
-                 update_frequency=10.):
+    def __init__(self, namespace, waypoints, update_frequency=10.):
         """
         A Class that interfaces with MAVROS for executing actions
         """
-        self.namespace = namespace
+        self.current_mode = ''
+        self.previous_mode = ''
+        self.namespace = namespace['name']
+        self.battery_rate_mean = 1.0
+        self.battery_rate_std = 1.0
+        self.battery_voltages = list()
+        self.low_battery = False
+        self.set_battery(namespace['max_fuel'], namespace['min_fuel'],
+                         namespace['fuel_rate'])
+        self._cancel_action = False
+        self.external_intervened = False
+        self.state = State()
+        self.home = HomePosition()
+        self.global_pose = NavSatFix()
+        self.local_pose = PoseStamped()
+        self.heading = 0.0
+        self.waypoints = [None]
+        self._current_wp = -1
+        self._radius = 1e-5
+        self._rate = rospy.Rate(update_frequency)
+        # UAV specific variables
+        self.irr_name = namespace['irr_attached']
+        self._irr_ready_to_be_picked = 0
         self.landed = True
         self.home_moved = False
         self.rel_alt = 0.
         self.rangefinder = -1.
-        self.wp_reached = -1
-        self.previous_mode = ''
-        self.current_mode = ''
-        self._cancel_action = False
-        self.external_intervened = False
-        self.state = State()
-        self.heading = 0.0
-        self.waypoints = list()
-        self.home = HomePosition()
-        self.global_pose = NavSatFix()
-        self.battery_voltages = [self.INIT_VOLTAGE for _ in range(100)]
-        self.low_battery = False
-        self._waypoints = waypoints
-        self._current_wp = -1
-        self._rel_alt = [0. for _ in range(20)]
-        self._rangefinder = [-1. for _ in range(10)]
+        self._alt_radius = 0.5
+        self._rel_alt = [0. for _ in range(5)]
+        self._rangefinder = [-1. for _ in range(5)]
         self._min_range = -1.
-        self._status_text = ''
-        self._arm_status = [False for _ in range(5)]
-        self.asv_carrier = asv_carrier
-        self.target_heading = [0.0 for _ in range(20)]
-        self.target_global_pose = [NavSatFix() for _ in range(20)]
-
-        # Service proxies
-        rospy.loginfo('Waiting for service /%s/mavros/cmd/command ...' %
-                      self.namespace)
-        rospy.wait_for_service('/%s/mavros/cmd/command' % self.namespace)
-        self._command_proxy = rospy.ServiceProxy(
-            '/%s/mavros/cmd/command' % self.namespace, CommandLong)
-        rospy.loginfo('Waiting for service /%s/mavros/mission/push ...' %
-                      self.namespace)
-        rospy.wait_for_service('/%s/mavros/mission/push' % self.namespace)
-        self._add_wp_proxy = rospy.ServiceProxy(
-            '/%s/mavros/mission/push' % self.namespace, WaypointPush)
-        rospy.loginfo(
-            'Waiting for service /%s/mavros/mission/set_current ...' %
-            self.namespace)
-        rospy.wait_for_service('/%s/mavros/mission/set_current' %
-                               self.namespace)
-        self._set_current_wp_proxy = rospy.ServiceProxy(
-            '/%s/mavros/mission/set_current' % self.namespace,
-            WaypointSetCurrent)
-        rospy.loginfo('Waiting for /%s/mavros/set_mode ...' % self.namespace)
-        rospy.wait_for_service('/%s/mavros/set_mode' % self.namespace)
-        self._set_mode_proxy = rospy.ServiceProxy(
-            '/%s/mavros/set_mode' % self.namespace, SetMode)
-        rospy.loginfo('Wait for service /%s/mavros/mission/clear ...' %
-                      self.namespace)
-        rospy.wait_for_service('/%s/mavros/mission/clear' % self.namespace)
-        self._clear_wp_proxy = rospy.ServiceProxy(
-            '/%s/mavros/mission/clear' % self.namespace, WaypointClear)
-        rospy.loginfo('Waiting for /%s/mavros/cmd/arming ...' % self.namespace)
-        rospy.wait_for_service('/%s/mavros/cmd/arming' % self.namespace)
-        self._arming_proxy = rospy.ServiceProxy(
-            '/%s/mavros/cmd/arming' % self.namespace, CommandBool)
-        rospy.loginfo('Waiting for /%s/mavros/cmd/takeoff ...' %
-                      self.namespace)
-        rospy.wait_for_service('/%s/mavros/cmd/takeoff' % self.namespace)
-        self._takeoff_proxy = rospy.ServiceProxy(
-            '/%s/mavros/cmd/takeoff' % self.namespace, CommandTOL)
-        rospy.loginfo('Waiting for /%s/mavros/cmd/set_home ...' %
-                      self.namespace)
-        rospy.wait_for_service('/%s/mavros/cmd/set_home' % self.namespace)
-        self._set_home_proxy = rospy.ServiceProxy(
-            '/%s/mavros/cmd/set_home' % self.namespace, CommandHome)
-
-        self._rate = rospy.Rate(update_frequency)
-
-        # Publisher
-        self._setpoint_pub = rospy.Publisher('/%s/mavros/setpoint_raw/global' %
-                                             self.namespace,
-                                             GlobalPositionTarget,
-                                             queue_size=10)
+        self.target_heading = [0.0 for _ in range(5)]
+        self.target_global_pose = [NavSatFix() for _ in range(5)]
+        # LHM Controller
+        if namespace['retrieve_system'] and "simulation" not in rospy.get_param(
+                "~scenario_type", "simulation"):
+            self.lhm = LHMExecutor(self.namespace, update_frequency)
+        if "simulation" in rospy.get_param("~scenario_type", "simulation"):
+            self.blade_pose = [[0., 0., 0.] for _ in range(5)]
+            rospy.Subscriber('/edge_wt_detector',
+                             PoseArray,
+                             self._wt_cb,
+                             queue_size=1)
+            # simulated winch system
+            self._lhm_pub = rospy.Publisher('/attach_plugin/attach',
+                                            String,
+                                            queue_size=3)
 
         # Subscribers
         rospy.Subscriber('/%s/mavros/state' % self.namespace,
                          State,
                          self._state_cb,
-                         queue_size=10)
+                         queue_size=1)
         # halt until mavros is connected to a uav
-        rospy.loginfo('Waiting for a connection between MAVROS and UAV ...')
+        rospy.loginfo('Waiting for a connection to %s ...' % self.namespace)
         while (not self.state.connected):
             self._rate.sleep()
         rospy.Subscriber('/%s/mavros/home_position/home' % self.namespace,
                          HomePosition,
                          self._home_cb,
-                         queue_size=10)
+                         queue_size=1)
         rospy.Subscriber('/%s/mavros/global_position/rel_alt' % self.namespace,
                          Float64,
                          self._relative_alt_cb,
-                         queue_size=10)
+                         queue_size=1)
         rospy.Subscriber('/%s/mavros/battery' % self.namespace,
                          BatteryState,
                          self._battery_cb,
-                         queue_size=10)
+                         queue_size=1)
         rospy.Subscriber('/%s/mavros/global_position/global' % self.namespace,
                          NavSatFix,
                          self._global_pose_cb,
-                         queue_size=10)
-        rospy.Subscriber('/%s/mavros/mission/reached' % self.namespace,
-                         WaypointReached,
-                         self._wp_reached_cb,
-                         queue_size=10)
-        rospy.Subscriber('/%s/mavros/statustext/recv' % self.namespace,
-                         StatusText,
-                         self._status_text_cb,
-                         queue_size=10)
+                         queue_size=1)
+        rospy.Subscriber('/%s/mavros/local_position/pose' % self.namespace,
+                         PoseStamped,
+                         self._local_pose_cb,
+                         queue_size=1)
         rospy.Subscriber('/%s/mavros/rangefinder/rangefinder' % self.namespace,
                          Range,
                          self._rangefinder_cb,
-                         queue_size=10)
+                         queue_size=1)
         rospy.Subscriber('/%s/mavros/global_position/compass_hdg' %
                          self.namespace,
                          Float64,
                          self._heading_cb,
-                         queue_size=10)
+                         queue_size=1)
+
+        # Service proxies
+        rospy.loginfo('Waiting for /%s/mavros/cmd/set_home ...' %
+                      self.namespace)
+        rospy.wait_for_service('/%s/mavros/cmd/set_home' % self.namespace)
+        self._set_home_proxy = rospy.ServiceProxy(
+            '/%s/mavros/cmd/set_home' % self.namespace, CommandHome)
+        self.set_current_location_as_home()
+
+        rospy.loginfo('Waiting for /%s/mavros/set_mode ...' % self.namespace)
+        rospy.wait_for_service('/%s/mavros/set_mode' % self.namespace)
+        self._set_mode_proxy = rospy.ServiceProxy(
+            '/%s/mavros/set_mode' % self.namespace, SetMode)
+        rospy.loginfo('Waiting for /%s/mavros/cmd/takeoff ...' %
+                      self.namespace)
+        rospy.wait_for_service('/%s/mavros/cmd/takeoff' % self.namespace)
+        self._takeoff_proxy = rospy.ServiceProxy(
+            '/%s/mavros/cmd/takeoff' % self.namespace, CommandTOL)
+        # Publisher
+        self._setpoint_pub = rospy.Publisher('/%s/mavros/setpoint_raw/global' %
+                                             self.namespace,
+                                             GlobalPositionTarget,
+                                             queue_size=3)
+
+        # Adding initial waypoints' configuration
+        while self.waypoints[0] is None:
+            self._rate.sleep()
+        self.waypoints = self.waypoints + waypoints
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.update_wp_position)
         rospy.Timer(self._rate.sleep_dur, self.update_landing_status)
         rospy.Timer(10 * self._rate.sleep_dur, self.intervene_observer)
-        rospy.loginfo('Adding WPs ...')
-        # Adding initial waypoints' configuration
-        self.set_current_location_as_home()
-        while not self.add_waypoints():
-            self._rate.sleep()
+        # change mode just to fill self.current_mode and self.previous_mode
+        self.guided_mode()
+
+    def _wt_cb(self, msg):
+        """
+        Blade position estimate
+        """
+        if len(msg.poses):
+            self.blade_pose.append([
+                msg.poses[-1].position.x, msg.poses[-1].position.y,
+                msg.poses[-1].position.z
+            ])
+            self.blade_pose = self.blade_pose[1:]
 
     def _heading_cb(self, msg):
         """
@@ -206,19 +202,6 @@ class ActionExecutor(object):
         if (self._min_range == -1) and (-1. not in self._rangefinder):
             self._min_range = np.mean(self._rangefinder)
 
-    def _status_text_cb(self, msg):
-        """
-        Status text call back
-        """
-        if msg.text == 'PreArm: Gyros not calibrated':
-            self._status_text = msg.text
-
-    def _wp_reached_cb(self, msg):
-        """
-        Waypoint reached call back
-        """
-        self.wp_reached = msg.wp_seq
-
     def _state_cb(self, msg):
         """
         UAV current state callback
@@ -226,7 +209,6 @@ class ActionExecutor(object):
         if self.current_mode == '':
             self.current_mode = msg.mode
         self.state = msg
-        self._arm_status[msg.header.seq % len(self._arm_status)] = msg.armed
 
     def _home_cb(self, msg):
         """
@@ -236,13 +218,19 @@ class ActionExecutor(object):
             prev_home = np.array(
                 [self.home.geo.latitude, self.home.geo.longitude])
             current_home = np.array([msg.geo.latitude, msg.geo.longitude])
-            if np.linalg.norm(prev_home - current_home) > 3e-06:
+            if np.linalg.norm(prev_home - current_home) > self._radius:
                 self.home_moved = True
                 self.home = msg
             else:
                 self.home_moved = False
         else:
             self.home = msg
+        self.waypoints[0] = {
+            'yaw': 0.0,
+            'lat': msg.geo.latitude,
+            'long': msg.geo.longitude,
+            'rel_alt': rospy.get_param("~takeoff_altitude", 10.)
+        }
 
     def _relative_alt_cb(self, msg):
         """
@@ -258,41 +246,33 @@ class ActionExecutor(object):
         """
         self.global_pose = msg
 
+    def _local_pose_cb(self, msg):
+        """
+        UAV local position callback
+        """
+        self.local_pose = msg
+
     def _battery_cb(self, msg):
         """
         UAV Battery state callback
         """
         self.battery_voltages[msg.header.seq %
                               len(self.battery_voltages)] = msg.voltage
+        delta = self.INIT_VOLTAGE - self.MINIMUM_VOLTAGE
         self.low_battery = (np.mean(self.battery_voltages) <=
-                            self.MINIMUM_VOLTAGE) and (self._current_wp != 0)
+                            (self.MINIMUM_VOLTAGE +
+                             (0.1 * delta))) and (self._current_wp != 0)
 
-    def update_wp_position(self, event):
-        """
-        Update UAV position relative to UAV waypoints
-        """
-        wp = -1
-        for idx, waypoint in enumerate(self.waypoints):
-            temp = np.array([waypoint.x_lat, waypoint.y_long])
-            cur_pos = np.array([
-                self.global_pose.latitude,
-                self.global_pose.longitude,
-            ])
-            alt_diff = abs(self.global_pose.altitude -
-                           (self.home.geo.altitude + waypoint.z_alt))
-            if np.linalg.norm(cur_pos - temp) < 1e-5 and alt_diff < 0.5:
-                wp = idx
-                break
-        self._current_wp = wp
-
-    def set_battery(self, init_batt, min_batt):
+    def set_battery(self, init_batt, min_batt, batt_rate):
         """
         Setting initial battery and minimum battery condition
         """
-        rospy.loginfo('Setting up battery requirements...')
+        rospy.loginfo('%s is setting up battery requirements...' %
+                      self.namespace)
         self.INIT_VOLTAGE = init_batt
         self.MINIMUM_VOLTAGE = min_batt
-        self.battery_voltages = [self.INIT_VOLTAGE for _ in range(100)]
+        self.battery_voltages = [self.INIT_VOLTAGE for _ in range(20)]
+        self.battery_rate_mean, self.battery_rate_std = batt_rate
         self.low_battery = False
 
     def intervene_observer(self, event):
@@ -302,6 +282,26 @@ class ActionExecutor(object):
         mode_status_check = (self.current_mode != '') and (
             self.state.mode not in [self.current_mode, self.previous_mode])
         self.external_intervened = mode_status_check or self._cancel_action
+
+    def update_wp_position(self, event):
+        """
+        Update UAV position relative to UAV waypoints
+        """
+        wp = -1
+        cur_pos = np.array(
+            [self.global_pose.latitude, self.global_pose.longitude])
+        for idx, waypoint in enumerate(self.waypoints):
+            temp = np.array([waypoint['lat'], waypoint['long']])
+            alt_diff = abs(self.global_pose.altitude -
+                           (self.home.geo.altitude + waypoint['rel_alt']))
+            if idx == 0 and (np.linalg.norm(cur_pos - temp) < self._radius):
+                wp = idx
+                break
+            elif (np.linalg.norm(cur_pos - temp) <
+                  self._radius) and (alt_diff < self._alt_radius):
+                wp = idx
+                break
+        self._current_wp = wp
 
     def update_landing_status(self, event):
         """
@@ -313,46 +313,6 @@ class ActionExecutor(object):
                            (self._min_range + 0.1)) or landed
         else:
             self.landed = landed or (self.rel_alt <= 0.1)
-        # elif self._status_text == 'PreArm: Gyros not calibrated':
-        #     self.landed = (False in self._arm_status)
-
-    def add_waypoints(self, index=0):
-        """
-        Setting up waypoints for the UAV
-        """
-        # Clear current wps available
-        self._clear_wp_proxy()
-        # First wp is home with landing action
-        home_wp = Waypoint(Waypoint.FRAME_GLOBAL_REL_ALT, 21, False, False, .6,
-                           1., 0, 0, self.home.geo.latitude,
-                           self.home.geo.longitude, 0.)
-        wps = [home_wp]
-        # Iterating other wps given by planner
-        for waypoint in self._waypoints:
-            wp = Waypoint(Waypoint.FRAME_GLOBAL_REL_ALT, 16, False, False,
-                          waypoint['hold_time'], waypoint['radius'], 0,
-                          waypoint['yaw'], waypoint['lat'], waypoint['long'],
-                          waypoint['rel_alt'])
-            wps.append(wp)
-        # Push waypoints to mavros service
-        response = self._add_wp_proxy(index, wps)
-        if response.success:
-            rospy.loginfo('%d waypoints are added' % response.wp_transfered)
-        else:
-            rospy.logwarn('No waypoint is added!')
-        self.waypoints = wps
-        return response.success
-
-    def set_current_target_wp(self, wp_index):
-        """
-        Set target wp for UAV to go
-        """
-        response = self._set_current_wp_proxy(wp_index)
-        if response.success:
-            rospy.loginfo('Setting current target waypoint to %d' % wp_index)
-        else:
-            rospy.logwarn('Waypoint %d can\'t be set!' % wp_index)
-        return response.success
 
     def set_current_location_as_home(self):
         """
@@ -363,7 +323,9 @@ class ActionExecutor(object):
             response = self._set_home_proxy(True, 0., 0., 0., 0.).success
             self._rate.sleep()
         if response:
-            rospy.loginfo('Setting current location as the new home ...')
+            rospy.loginfo(
+                '%s is setting current location as the new home ...' %
+                self.namespace)
         return response
 
     def guided_mode(self, duration=rospy.Duration(60, 0), mode='guided'):
@@ -377,7 +339,8 @@ class ActionExecutor(object):
                    mode.upper()) and (not self.external_intervened):
             self._set_mode_proxy(0, mode)
             self._rate.sleep()
-        rospy.loginfo('UAV changes its mode to %s ...' % mode.upper())
+        rospy.loginfo('%s changes its mode to %s ...' %
+                      (self.namespace, mode.upper()))
         if self.state.mode == mode.upper():
             self.previous_mode = self.current_mode
             self.current_mode = mode.upper()
@@ -388,39 +351,46 @@ class ActionExecutor(object):
             response = self.EXTERNAL_INTERVENTION
         return response
 
-    def arm(self, duration=rospy.Duration(60, 0)):
+    def calculate_batt_rate(self, init_batt, init_time,
+                            std_dev_likelihood=1.0):
         """
-        Arm throttle action
+        Calculate battery rate consumption
         """
-        start = rospy.Time.now()
-        self.guided_mode(duration)
-        duration = duration - (rospy.Time.now() - start)
-        start = rospy.Time.now()
-        while (rospy.Time.now() - start <
-               duration) and (not rospy.is_shutdown()) and (
-                   not self.state.armed) and (not self.external_intervened):
-            self._arming_proxy(True)
-            self._rate.sleep()
-        rospy.loginfo('Arming the UAV ...')
-        response = self.state.armed
-        if (rospy.Time.now() - start) > duration:
-            response = self.OUT_OF_DURATION
-        if self.external_intervened:
-            response = self.EXTERNAL_INTERVENTION
-        return int(response)
+        x = float(init_batt - np.mean(self.battery_voltages))
+        x = x / (rospy.Time.now() - init_time).secs
+        self.battery_rate_mean = (
+            (float(self.battery_rate_mean) / self.battery_rate_std**2) +
+            (x / std_dev_likelihood**2)) / ((1. / self.battery_rate_std**2) +
+                                            (1. / std_dev_likelihood**2))
+        self.battery_rate_std = 1. / ((1. / self.battery_rate_std**2) +
+                                      (1. / std_dev_likelihood))
 
     def takeoff(self, altitude, duration=rospy.Duration(60, 0)):
         """
         Take off action
         """
-        start = rospy.Time.now()
-        self.guided_mode(duration)
-        duration = duration - (rospy.Time.now() - start)
+        battery = np.mean(self.battery_voltages)
+        init_time = rospy.Time.now()
         start = rospy.Time.now()
         took_off = True
-        if self.landed:
+        if hasattr(self, 'lhm'):
+            took_off = took_off and (
+                self.lhm.takeoff_preparation(duration) == self.ACTION_SUCCESS)
+            duration = duration - (rospy.Time.now() - start)
+            start = rospy.Time.now()
+        elif hasattr(self, '_lhm_pub') and self.irr_name != "":
+            for _ in range(3):
+                self._lhm_pub.publish('%s,body,%s,base_link,1' %
+                                      (self.namespace, self.irr_name))
+                self._rate.sleep()
+        took_off = took_off and (self.request_arm(
+            duration=duration) == self.ACTION_SUCCESS)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        if self.landed and took_off:
             took_off = self._takeoff_proxy(0.1, 0, 0, 0, altitude).success
-            rospy.loginfo('UAV is taking off to %d meter height' % altitude)
+            rospy.loginfo('%s is taking off to %d meter height' %
+                          (self.namespace, altitude))
             while (rospy.Time.now() - start < duration) and (
                     not rospy.is_shutdown()
             ) and abs(self.rel_alt - altitude) > 0.5 and (
@@ -435,6 +405,8 @@ class ActionExecutor(object):
                     rospy.logwarn('Battery is below minimum voltage!')
                     break
                 self._rate.sleep()
+        if took_off:
+            self.calculate_batt_rate(battery, init_time, self.battery_rate_std)
         if (rospy.Time.now() - start) > duration:
             took_off = self.OUT_OF_DURATION
         if self.external_intervened:
@@ -445,6 +417,13 @@ class ActionExecutor(object):
              waypoint,
              duration=rospy.Duration(60, 0),
              low_battery_trip=False):
+        init_batt = np.mean(self.battery_voltages)
+        init_time = rospy.Time.now()
+        start = rospy.Time.now()
+        if hasattr(self, 'lhm'):
+            self.lhm.swing_reduction(duration)
+            duration = duration - (rospy.Time.now() - start)
+            start = rospy.Time.now()
         wp = self.waypoints[waypoint]
         target = GlobalPositionTarget()
         target.header.seq = 1
@@ -453,21 +432,29 @@ class ActionExecutor(object):
         target.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
         # this type of masking will ignore accel and veloci
         target.type_mask = 0b001111111000
-        target.latitude = wp.x_lat
-        target.longitude = wp.y_long
-        target.altitude = wp.z_alt
-        target.yaw = yaw_ned_to_enu(wp.param4)
+        target.latitude = wp['lat']
+        target.longitude = wp['long']
+        target.altitude = wp['rel_alt']
+        target.yaw = yaw_ned_to_enu(wp['yaw'])
         target.yaw_rate = 2.0
-        start = rospy.Time.now()
-        response = self.goto_coordinate(target, low_battery_trip, duration)
+        rospy.loginfo("%s is going to waypoint %d, lat: %.5f, long: %.5f" %
+                      (self.namespace, waypoint, wp['lat'], wp['long']))
+        response = self.goto_coordinate(target,
+                                        radius=self._radius,
+                                        alt_radius=self._alt_radius,
+                                        low_battery_trip=low_battery_trip,
+                                        duration=duration)
+        rospy.loginfo("%s is reaching waypoint %d, lat: %.5f, long: %.5f" %
+                      (self.namespace, waypoint, wp['lat'], wp['long']))
         if response == self.ACTION_SUCCESS:
-            duration = duration - (rospy.Time.now() - start)
-            # rospy.loginfo(min(duration, rospy.Duration(wp.param1)).secs)
-            rospy.sleep(min(duration, rospy.Duration(wp.param1)))
+            self.calculate_batt_rate(init_batt, init_time,
+                                     self.battery_rate_std)
         return response
 
     def goto_coordinate(self,
                         target,
+                        radius=5e-5,
+                        alt_radius=0.5,
                         low_battery_trip=False,
                         duration=rospy.Duration(60, 0)):
         """
@@ -491,8 +478,8 @@ class ActionExecutor(object):
                 self.global_pose.latitude,
                 self.global_pose.longitude,
             ])
-            if np.linalg.norm(cur_pos - temp) < 5e-6 and abs(
-                    self._rel_alt[-1] - target.altitude) < 0.5:
+            if np.linalg.norm(cur_pos - temp) < radius and abs(
+                    self._rel_alt[-1] - target.altitude) < alt_radius:
                 reached = True
             self._rate.sleep()
         response = int(reached)
@@ -511,9 +498,9 @@ class ActionExecutor(object):
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
         if not disarm:
-            rospy.loginfo('Waiting for the UAV to be ARMED ...')
+            rospy.loginfo('Waiting for %s to be ARMED ...' % self.namespace)
         else:
-            rospy.loginfo('Waiting for the UAV to be DISARMED ...')
+            rospy.loginfo('Waiting for %s to be DISARMED ...' % self.namespace)
         while (rospy.Time.now() - start < duration) and not (
                 rospy.is_shutdown()) and (not self.external_intervened) and (
                     not (disarm ^ self.state.armed)):
@@ -531,10 +518,17 @@ class ActionExecutor(object):
         """
         Return to home action
         """
+        battery = np.mean(self.battery_voltages)
+        init_time = rospy.Time.now()
         start = rospy.Time.now()
+        landed = False
+        if hasattr(self, 'lhm'):
+            landed = landed and (
+                self.lhm.landing_preparation(duration) == self.ACTION_SUCCESS)
+            duration = duration - (rospy.Time.now() - start)
+            start = rospy.Time.now()
         if not monitor_home or not self.home_moved:
             self.guided_mode(duration, 'rtl')
-        self._rate.sleep()
         while (rospy.Time.now() - start <
                duration) and not (rospy.is_shutdown()) and (
                    not self.external_intervened) and (not self.landed):
@@ -547,11 +541,107 @@ class ActionExecutor(object):
         start = rospy.Time.now()
         disarm = self.request_arm(True, duration)
         landed = int(self.landed and disarm == self.ACTION_SUCCESS)
+        if landed:
+            self.calculate_batt_rate(battery, init_time, self.battery_rate_std)
         if (rospy.Time.now() - start) > duration:
             landed = self.OUT_OF_DURATION
         if self.external_intervened:
             landed = self.EXTERNAL_INTERVENTION
         return landed
+
+    def inspect_wt(self, duration=rospy.Duration(900, 0)):
+        """
+        UAV Inspection for a WT that involves flying close and parallel
+        to each blade of a WT
+        """
+        battery = np.mean(self.battery_voltages)
+        init_time = rospy.Time.now()
+        start = rospy.Time.now()
+        # position where drone is originated in one of the wps
+        wp = self.waypoints[self._current_wp]
+        original = GlobalPositionTarget()
+        original.header.seq = 1
+        original.header.stamp = rospy.Time.now()
+        original.header.frame_id = 'map'
+        original.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
+        original.type_mask = 0b001111111000
+        original.latitude = wp['lat']
+        original.longitude = wp['long']
+        original.altitude = wp['rel_alt']
+        original.yaw = yaw_ned_to_enu(wp['yaw'])
+        original.yaw_rate = 2.0
+        rospy.loginfo("%s is scanning the first blade..." % self.namespace)
+        first_blade = self.blade_inspect(original, [30.0, 0.0, 0.0], duration)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        rospy.loginfo("%s is scan second blade..." % self.namespace)
+        second_blade = self.blade_inspect(original, [
+            30.0 * np.cos(138. / 180.0 * np.pi), 0.000,
+            85.6 * np.sin(120. / 180.0 * np.pi)
+        ], duration)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        rospy.loginfo("%s is scan third blade..." % self.namespace)
+        third_blade = self.blade_inspect(original, [
+            30.0 * np.cos(234. / 180.0 * np.pi), 0.000,
+            85.6 * np.sin(240. / 180.0 * np.pi)
+        ], duration)
+        if np.min([first_blade, second_blade,
+                   third_blade]) == self.ACTION_SUCCESS:
+            self.calculate_batt_rate(battery, init_time, self.battery_rate_std)
+        rospy.loginfo("%s has done the inspection..." % self.namespace)
+        return np.min([first_blade, second_blade, third_blade])
+
+    def blade_inspect(self,
+                      original,
+                      target_position,
+                      duration=rospy.Duration(300, 0),
+                      fly_return=True):
+        """
+        Inspecting the blade given the [original] pose to return to
+        and end [target] position to scan
+        """
+        start = rospy.Time.now()
+        reached_original = self.ACTION_SUCCESS
+        # position where drone is supposed to be
+        heading = self.heading
+        offset_x = (target_position[0] * np.cos(heading) +
+                    target_position[1] * np.sin(heading))
+        offset_y = (-1 * target_position[0] * np.sin(heading) +
+                    target_position[1] * np.cos(heading))
+        latitude_offset, longitude_offset = xy_to_longlat(
+            offset_x, offset_y, self.global_pose.latitude)
+        target = GlobalPositionTarget()
+        target.header.seq = 1
+        target.header.stamp = rospy.Time.now()
+        target.header.frame_id = 'map'
+        target.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
+        target.type_mask = 0b001111111000
+        target.latitude = self.global_pose.latitude + latitude_offset
+        target.longitude = self.global_pose.longitude + longitude_offset
+        target.altitude = self.rel_alt + target_position[2]
+        target.yaw = yaw_ned_to_enu(heading)
+        target.yaw_rate = 2.0
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        reached_target = self.goto_coordinate(target,
+                                              radius=self._radius,
+                                              duration=duration)
+        rospy.loginfo("%s is returning to %3.5f, %3.5f position..." %
+                      (self.namespace, original.latitude, original.longitude))
+        if reached_target == self.ACTION_SUCCESS and fly_return:
+            original.header.seq = 1
+            original.header.stamp = rospy.Time.now()
+            original.header.frame_id = 'map'
+            duration = duration - (rospy.Time.now() - start)
+            start = rospy.Time.now()
+            reached_original = self.goto_coordinate(original,
+                                                    radius=self._radius,
+                                                    duration=duration)
+        return np.min([reached_target, reached_original])
+
+    def open_hook(self, duration=rospy.Duration(60, 0)):
+        return self.lhm.open_hook(duration)
 
     def _target_global_pose_cb(self, msg):
         """
@@ -591,6 +681,8 @@ class ActionExecutor(object):
                       target,
                       home=False,
                       offset=[0., 0., 0.],
+                      yaw_offset=0.,
+                      desired_follower_alt=None,
                       follow_duration=rospy.Duration(60, 0),
                       duration=rospy.Duration(600, 0)):
         """
@@ -610,12 +702,12 @@ class ActionExecutor(object):
                                     target,
                                     NavSatFix,
                                     self._target_global_pose_cb,
-                                    queue_size=10)
+                                    queue_size=1)
         head_sub = rospy.Subscriber('/%s/mavros/global_position/compass_hdg' %
                                     target,
                                     Float64,
                                     self._target_heading_cb,
-                                    queue_size=10)
+                                    queue_size=1)
         # Start following the target
         followed_duration = rospy.Duration(0, 0)
         duration = duration - (rospy.Time.now() - start)
@@ -624,7 +716,8 @@ class ActionExecutor(object):
                 rospy.is_shutdown()) and (not self.external_intervened) and (
                     followed_duration < follow_duration):
             if self.low_battery and not home:
-                rospy.logwarn('Battery is below minimum voltage!!!')
+                rospy.logwarn('%s battery is below minimum voltage!!!' %
+                              self.namespace)
                 break
             heading = self.target_heading[-1]
             if self.target_global_pose[-1] == NavSatFix():
@@ -660,10 +753,12 @@ class ActionExecutor(object):
                              (self.namespace,
                               (self._rangefinder[-1] - self._min_range)))
                 target_alt = self._rel_alt[-1]
+            elif desired_follower_alt is not None:
+                target_alt = desired_follower_alt
             else:
                 target_alt = (altitude - self.home.geo.altitude + offset[2])
             target.altitude = target_alt
-            target.yaw = yaw_ned_to_enu(heading)
+            target.yaw = yaw_ned_to_enu(heading + (yaw_offset / 180.) * np.pi)
             target.yaw_rate = 2.0
             # Publish aimed position
             self._setpoint_pub.publish(target)
@@ -707,7 +802,7 @@ class ActionExecutor(object):
         # First step approaching the launchpad (side or behind)
         offset = [
             0.0,
-            rospy.get_param("~dist_initial_landing", 5.0),
+            rospy.get_param("~dist_initial_landing", -5.0),
             rospy.get_param("~altitude_initial_landing", 10.)
         ]
         if "behind" in rospy.get_param("~landing_approach", "side"):
@@ -715,8 +810,8 @@ class ActionExecutor(object):
         else:
             offset = [offset[1], offset[0], offset[2]]
             rospy.loginfo("Approaching ASV from side ...")
-        self.follow_target('%s_launchpad' % self.namespace, True, offset,
-                           rospy.Duration(3, 0), duration)
+        self.follow_target('%s_launchpad' % self.namespace, True, offset, 0.,
+                           None, rospy.Duration(3, 0), duration)
         # Second step approaching the launchpad (side or behind)
         landed = self.ACTION_FAIL
         offset = [0.0, 0.0, rospy.get_param("~takeoff_altitude", 10.)]
@@ -730,7 +825,7 @@ class ActionExecutor(object):
             duration = duration - (rospy.Time.now() - start)
             start = rospy.Time.now()
             self.follow_target('%s_launchpad' % self.namespace, True, offset,
-                               rospy.Duration(3, 0), duration)
+                               0., None, rospy.Duration(3, 0), duration)
             rangefinder_ok = (self._min_range > -1)
             rangefinder_ok = rangefinder_ok and (
                 (self.rangefinder - self._min_range) <
@@ -755,30 +850,37 @@ class ActionExecutor(object):
             landed = self.EXTERNAL_INTERVENTION
         return landed
 
-    def reboot_autopilot_computer(self, duration=rospy.Duration(60, 0)):
+    def deploy_irr(self, duration=rospy.Duration(600, 0)):
         """
-        Preflight reboot shutdown for autopilot and onboard computer
+        Deploying a crawler
         """
+        battery = np.mean(self.battery_voltages)
         start = rospy.Time.now()
-        result = self._command_proxy(broadcast=False,
-                                     command=246,
-                                     confirmation=0,
-                                     param1=1.,
-                                     param2=1.,
-                                     param3=0.,
-                                     param4=0.,
-                                     param5=0.,
-                                     param6=0.,
-                                     param7=0.)
-        response = self.ACTION_SUCCESS if result.success else self.ACTION_FAIL
-        if (rospy.Time.now() - start) > duration:
-            response = self.OUT_OF_DURATION
+        if "simulation" in rospy.get_param("~scenario_type", "simulation"):
+            response = self.simu_drm_irr(self.irr_name, duration=duration)
+        else:
+            response = self.real_deploy_irr(duration)
+        if response == self.ACTION_SUCCESS:
+            self.calculate_batt_rate(battery, start, self.battery_rate_std)
         return response
 
-    def inspect_wt(self, duration=rospy.Duration(900, 0)):
+    def real_deploy_irr(self, duration=rospy.Duration(600, 0)):
         """
-        UAV Inspection for a WT that involves flying close and parallel
-        to each blade of a WT
+        Deploying a crawler in real world
+        """
+        rospy.sleep(10)
+        return self.ACTION_SUCCESS
+
+    def refuelling(self, duration=rospy.Duration(600, 0)):
+        """
+        Fake refuel
+        """
+        rospy.sleep(int(duration.secs / 2.0))
+        return self.ACTION_SUCCESS
+
+    def simu_drm_irr(self, irr, deploy=True, duration=rospy.Duration(600, 0)):
+        """
+        Deploying a crawler in simulation
         """
         start = rospy.Time.now()
         # position where drone is originated in one of the wps
@@ -789,71 +891,203 @@ class ActionExecutor(object):
         original.header.frame_id = 'map'
         original.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
         original.type_mask = 0b001111111000
-        original.latitude = wp.x_lat
-        original.longitude = wp.y_long
-        original.altitude = wp.z_alt
-        original.yaw = yaw_ned_to_enu(wp.param4)
+        original.latitude = wp['lat']
+        original.longitude = wp['long']
+        original.altitude = wp['rel_alt']
+        original.yaw = yaw_ned_to_enu(wp['yaw'])
         original.yaw_rate = 2.0
-        rospy.loginfo("Scan first blade...")
-        first_blade = self.blade_inspect(original, original.altitude,
-                                         [30.0, 0.0, 0.0], duration)
+        rospy.loginfo("%s is locating the blade..." % self.namespace)
+        # locate blade
+        response = self.blade_inspect(original, [8.0, 0.0, 0.0], duration,
+                                      False)
+        rospy.sleep(self._rate.sleep_dur * 30)
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
-        rospy.loginfo("Scan second blade...")
-        second_blade = self.blade_inspect(original, original.altitude, [
-            30.0 * np.cos(138. / 180.0 * np.pi), 0.000,
-            85.6 * np.sin(120. / 180.0 * np.pi)
-        ], duration)
+        blade_pose = np.mean(np.array(self.blade_pose).reshape(
+            len(self.blade_pose), 3),
+                             axis=0)
+        # fly above the blade
+        up_pose = [
+            blade_pose[0] - self.local_pose.pose.position.x,
+            blade_pose[1] - self.local_pose.pose.position.y + 1.9,
+            blade_pose[2] - self.local_pose.pose.position.z + 3.
+        ]
+        rospy.loginfo("Blade is located, %s is flying up..." % self.namespace)
+        fly_up = self.blade_inspect(original, up_pose, duration, False)
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
-        rospy.loginfo("Scan third blade...")
-        third_blade = self.blade_inspect(original, original.altitude, [
-            30.0 * np.cos(234. / 180.0 * np.pi), 0.000,
-            85.6 * np.sin(240. / 180.0 * np.pi)
-        ], duration)
-        rospy.loginfo("Inspection is done...")
-        return np.min([first_blade, second_blade, third_blade])
+        if deploy:
+            rospy.loginfo("%s is preparing to drop %s" % (self.namespace, irr))
+            # rotate right 90 degree while going down
+            target = GlobalPositionTarget()
+            target.header.seq = 1
+            target.header.stamp = rospy.Time.now()
+            target.header.frame_id = 'map'
+            target.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
+            target.type_mask = 0b001111111000
+            target.latitude = self.global_pose.latitude
+            target.longitude = self.global_pose.longitude
+            target.altitude = self.rel_alt - 3 + self._min_range + 0.2
+            target.yaw = yaw_ned_to_enu(self.heading + np.pi / 2)
+            target.yaw_rate = 2.0
+            reached_target = self.goto_coordinate(target,
+                                                  radius=self._radius,
+                                                  duration=duration)
+        else:
+            rospy.loginfo("%s is preparing to pick %s" % (self.namespace, irr))
+            reached_target = self.follow_target(
+                irr, False, [0., 0., self._min_range + 0.2], 0., None,
+                rospy.Duration(3, 0), duration)
+        for _ in range(3):
+            self._lhm_pub.publish('%s,body,%s,base_link,%d' %
+                                  (self.namespace, irr, int(not deploy)))
+            self._rate.sleep()
 
-    def blade_inspect(self,
-                      original,
-                      relative_altitude,
-                      target_position,
-                      duration=rospy.Duration(300, 0)):
-        """
-        Inspecting the blade given the [original] pose to return to
-        and end [target] position to scan
-        """
-        start = rospy.Time.now()
-        reached_original = self.ACTION_FAIL
-        # position where drone is supposed to be
-        heading = self.heading
-        offset_x = (target_position[0] * np.cos(heading) +
-                    target_position[1] * np.sin(heading))
-        offset_y = (-1 * target_position[0] * np.sin(heading) +
-                    target_position[1] * np.cos(heading))
-        latitude_offset, longitude_offset = xy_to_longlat(
-            offset_x, offset_y, self.global_pose.latitude)
         target = GlobalPositionTarget()
         target.header.seq = 1
         target.header.stamp = rospy.Time.now()
         target.header.frame_id = 'map'
         target.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
         target.type_mask = 0b001111111000
-        target.latitude = self.global_pose.latitude + latitude_offset
-        target.longitude = self.global_pose.longitude + longitude_offset
-        target.altitude = self.rel_alt + target_position[2]
-        target.yaw = yaw_ned_to_enu(heading)
+        target.latitude = self.global_pose.latitude
+        target.longitude = self.global_pose.longitude
+        target.altitude = self.rel_alt + 3
+        target.yaw = yaw_ned_to_enu(self.heading + np.pi / 2)
         target.yaw_rate = 2.0
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
-        reached_target = self.goto_coordinate(target, duration)
-        rospy.loginfo("Return to %3.5f, %3.5f position..." %
-                      (original.latitude, original.longitude))
-        if reached_target == self.ACTION_SUCCESS:
-            original.header.seq = 1
-            original.header.stamp = rospy.Time.now()
-            original.header.frame_id = 'map'
+        reached_target = self.goto_coordinate(target,
+                                              radius=self._radius,
+                                              duration=duration)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        rospy.loginfo("%s is flying back to waypoint ..." % self.namespace)
+        reached_original = self.goto_coordinate(original,
+                                                radius=self._radius,
+                                                duration=duration)
+        return np.min([response, fly_up, reached_target, reached_original])
+
+    def retrieve_irr(self, irr, duration=rospy.Duration(600, 0)):
+        """
+        Retrieving a crawler
+        """
+        battery = np.mean(self.battery_voltages)
+        init = rospy.Time.now()
+        start = rospy.Time.now()
+        if "simulation" in rospy.get_param("~scenario_type", "simulation"):
+            while (self._irr_ready_to_be_picked == 0
+                   ) and not (rospy.is_shutdown()) and (
+                       rospy.Time.now() - start <
+                       duration) and (not self.external_intervened):
+                self._rate.sleep()
             duration = duration - (rospy.Time.now() - start)
             start = rospy.Time.now()
-            reached_original = self.goto_coordinate(original, duration)
-        return np.min([reached_target, reached_original])
+            if self._irr_ready_to_be_picked > 0:
+                response = self.simu_drm_irr(irr, False, duration)
+            else:
+                response = self.ACTION_FAIL
+            self._irr_ready_to_be_picked = 0
+        else:
+            response = self.real_retrieve_irr(irr, duration)
+        if response == self.ACTION_SUCCESS:
+            self.calculate_batt_rate(battery, init, self.battery_rate_std)
+        return response
+
+    def real_retrieve_irr(self, irr, duration=rospy.Duration(600, 0)):
+        """
+        Retrieving a crawler in real world
+        """
+        start = rospy.Time.now()
+        wp = self._current_wp
+        rospy.loginfo("%s is approaching side of %s ..." %
+                      (self.namespace, irr))
+        approaching = self.follow_target(irr, False, [2., 0., 0.], 270., 3.,
+                                         rospy.Duration(1, 0), duration)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        rospy.loginfo("%s is waiting for engagement ..." % self.namespace)
+        while (self._irr_ready_to_be_picked == 0) and not (
+                rospy.is_shutdown()) and (rospy.Time.now() - start < duration
+                                          ) and (not self.external_intervened):
+            self._rate.sleep()
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        if self._irr_ready_to_be_picked > 0:
+            rospy.loginfo("%s is trying to engage with %s ..." %
+                          (self.namespace, irr))
+            engaging = self.irr_engagement(duration)
+            duration = duration - (rospy.Time.now() - start)
+            start = rospy.Time.now()
+        else:
+            engaging = self.ACTION_FAIL
+        self._irr_ready_to_be_picked = 0
+        back_to_wp = self.goto(wp, duration, True)
+        return np.min([approaching, engaging, back_to_wp])
+
+    def irr_engagement(self,
+                       max_traveldist=2.5,
+                       duration=rospy.Duration(600, 0)):
+        """
+        Fly slowly for engagement
+        """
+        # Start and set to guide mode
+        start = rospy.Time.now()
+        self.guided_mode(duration=duration)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        engaged = self.ACTION_FAIL
+        heading = self.heading
+        pose = self.global_pose
+        while (rospy.Time.now() - start < duration) and not (
+                rospy.is_shutdown()) and (not self.external_intervened):
+            if hasattr(self, 'lhm') and self.lhm.status[2]:
+                rospy.loginfo("%s is engaged! Flying up..." % self.namespace)
+                engaged = self.ACTION_SUCCESS
+                break
+            # assuming traveling to the head (or x) direction only
+            offset_x = max_traveldist * np.cos(heading)
+            offset_y = -1 * max_traveldist * np.sin(heading)
+            latitude_offset, longitude_offset = xy_to_longlat(
+                offset_x, offset_y, pose.latitude)
+            if (self.global_pose.longitude > pose.longitude +
+                    longitude_offset) and (self.global_pose.latitude >
+                                           pose.latitude + latitude_offset):
+                rospy.loginfo("%s has no engagement detected! Flying up..." %
+                              self.namespace)
+                break
+            # Setup target position
+            target = GlobalPositionTarget()
+            target.header.seq = 1
+            target.header.stamp = rospy.Time.now()
+            target.header.frame_id = 'map'
+            target.type_mask = 4039
+            target.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
+            # Due to yaw_ned_to_enu conversion, the sin and cos are flipped
+            target.velocity.x = 0.2
+            # Publish aimed position
+            self._setpoint_pub.publish(target)
+            # Check uav position with target
+            self._rate.sleep()
+        # Flying up
+        target = GlobalPositionTarget()
+        target.header.seq = 1
+        target.header.stamp = rospy.Time.now()
+        target.header.frame_id = 'map'
+        target.coordinate_frame = GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
+        target.type_mask = 0b111111111000
+        target.latitude = self.global_pose.latitude
+        target.longitude = self.global_pose.longitude
+        target.altitude = self.rel_alt + rospy.get_param(
+            "~takeoff_altitude", 10)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        up = self.goto_coordinate(target,
+                                  radius=self._radius,
+                                  duration=duration)
+        duration = duration - (rospy.Time.now() - start)
+        start = rospy.Time.now()
+        if (rospy.Time.now() - start) > duration:
+            engaged = self.OUT_OF_DURATION
+        elif self.external_intervened:
+            engaged = self.EXTERNAL_INTERVENTION
+        return np.min([up, engaged])
