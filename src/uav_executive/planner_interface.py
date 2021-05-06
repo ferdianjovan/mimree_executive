@@ -178,6 +178,8 @@ class PlannerInterface(object):
             rospy.logwarn(
                 "External intervention is detected, cancelling mission!")
             self.publish_feedback(action_dispatch.action_id, 'action failed')
+        else:
+            self.publish_feedback(action_dispatch.action_id, 'action failed')
 
     def _battery_update(self, event):
         """
@@ -463,8 +465,12 @@ class PlannerInterface(object):
         for idx, msg in enumerate(self.dispatch_actions):
             if msg.action_id != self.action_sequence:
                 continue
-            duration = self.get_max_action_duration(msg.parameters,
-                                                    msg.duration)
+            duration = rospy.Duration(secs=int(msg.duration))
+            # duration = self.get_max_action_duration(msg.parameters,
+            #                                         msg.duration)
+            # print(
+            #     "params: %s, recommended: %.5f, max: %d.%d" %
+            #     (msg.parameters, msg.duration, duration.secs, duration.nsecs))
             # parse action message
             uav_names = [uav.namespace for uav in self.uavs]
             uav_name = [
@@ -479,7 +485,14 @@ class PlannerInterface(object):
                         msg, uav.takeoff,
                         [rospy.get_param('~takeoff_altitude', 10.), duration])
                 elif msg.name == 'uav_land':
-                    self._action(msg, uav.return_to_launch, [True, duration])
+                    # if "retrieve" in rospy.get_param("~scenario_type",
+                    #                                  "simulation"):
+                    #     self._action(msg, uav.dropping_irr_and_land,
+                    #                  [duration])
+                    # else:
+                    #     self._action(msg, uav.return_to_launch,
+                    #                  [True, duration])
+                    self._action(msg, uav.return_to_launch, [False, duration])
                 elif msg.name == 'uav_navigate':
                     self._action(msg, self.goto_waypoint,
                                  [uav, msg.parameters, duration])
@@ -574,6 +587,7 @@ class PlannerInterface(object):
         wps = [0, 0] if len(wps) == 0 else wps
         wps = wps[:2] if len(wps) > 2 else wps
         wps = [wps[0], wps[0]] if len(wps) == 1 else wps
+        print("wps: %s" % str(wps))
         try:
             conn = [
                 i[-2:] for i in self.connections if set(i[:2]) == set(wps)
@@ -599,13 +613,14 @@ class PlannerInterface(object):
         wps = [0, 0] if len(wps) == 0 else wps
         wps = wps[:2] if len(wps) > 2 else wps
         wps = [wps[0], wps[0]] if len(wps) == 1 else wps
-        idx, conn = [(idx, i) for idx, i in enumerate(self.connections)
-                     if set(i[:2]) == set(wps)][-1]
-        new_mean = ((float(conn[2]) / conn[3]**2) +
-                    (x / std_dev_likelihood**2)) / (
-                        (1. / conn[3]**2) + (1. / std_dev_likelihood**2))
-        new_std = 1. / ((1. / conn[3]**2) + (1. / std_dev_likelihood**2))
-        self.connections[idx] = [wps[0], wps[1], new_mean, new_std]
+        connections = [(idx, i) for idx, i in enumerate(self.connections)
+                       if set(i[:2]) == set(wps)]
+        for idx, conn in connections:
+            new_mean = ((float(conn[2]) / conn[3]**2) +
+                        (x / std_dev_likelihood**2)) / (
+                            (1. / conn[3]**2) + (1. / std_dev_likelihood**2))
+            new_std = 1. / ((1. / conn[3]**2) + (1. / std_dev_likelihood**2))
+            self.connections[idx] = [wps[0], wps[1], new_mean, new_std]
 
     def set_init(self, uavs, connections):
         """

@@ -24,6 +24,7 @@ class MissionExec(object):
         self.current_mission = {'uav': list(), 'asv': list(), 'irr': list()}
         self._rate = rospy.Rate(update_frequency)
         config = self.load_mission_config_file(filename, configname)
+        self.config = config
         self.metric_optimization = self._get_metric_optimisation()
         # ASV planner
         if len(config['asvs']) and len(config['asv_waypoints']):
@@ -78,6 +79,56 @@ class MissionExec(object):
                          queue_size=2)
         # Auto call functions
         rospy.Timer(50 * self._rate.sleep_dur, self.low_battery_replan)
+
+    def update_weight(self):
+        """
+        Updating the normal distribution for duration and fuel for each robot
+        """
+        # update uav
+        for idx, conf_uav in enumerate(self.config['uavs']):
+            for uav in self.uav_exec.uavs:
+                if uav.namespace == conf_uav['name']:
+                    self.config['uavs'][idx]['fuel_rate'] = [
+                        uav.battery_rate_mean, uav.battery_rate_std
+                    ]
+                    break
+        for idx, conf_conn in enumerate(
+                self.config['uav_waypoint_connection']):
+            for conn in self.uav_exec.connections:
+                if set(conf_conn[:2]) == set(conn[:2]):
+                    self.config['uav_waypoint_connection'][idx] = conn
+                    break
+        # update asv
+        for idx, conf_asv in enumerate(self.config['asvs']):
+            for asv in self.asv_exec.asvs:
+                if asv.namespace == conf_asv['name']:
+                    self.config['asvs'][idx]['fuel_rate'] = [
+                        asv.fuel_rate_mean, asv.fuel_rate_std
+                    ]
+                    break
+        for idx, conf_conn in enumerate(
+                self.config['asv_waypoint_connection']):
+            for conn in self.asv_exec.connections:
+                if set(conf_conn[:2]) == set(conn[:2]):
+                    self.config['asv_waypoint_connection'][idx] = conn
+                    break
+        # update irr
+        for idx, conf_irr in enumerate(self.config['irrs']):
+            for irr in self.irr_exec.irrs:
+                if irr.namespace == conf_irr['name']:
+                    self.config['irrs'][idx]['fuel_rate'] = [
+                        irr.fuel_rate_mean, irr.fuel_rate_std
+                    ]
+                    break
+        for idx, conf_conn in enumerate(
+                self.config['irr_waypoint_connection']):
+            for conn in self.irr_exec.connections:
+                if set(conf_conn[:2]) == set(conn[:2]):
+                    self.config['irr_waypoint_connection'][idx] = conn
+                    break
+        pkg_path = roslib.packages.get_pkg_dir('mimree_executive')
+        yaml.dump(self.config,
+                  open(pkg_path + '/config/learned_config.yaml', 'w'))
 
     def _feedback_cb(self, msg):
         """
@@ -285,5 +336,6 @@ if __name__ == '__main__':
     args = parser_arg.parse_args(sys.argv[1:7])
     mission_exec = MissionExec(args.config_file, args.config_mission)
     if mission_exec.add_mission(args.mission):
-        mission_exec.launch()
+        if mission_exec.launch():
+            mission_exec.update_weight()
     rospy.spin()

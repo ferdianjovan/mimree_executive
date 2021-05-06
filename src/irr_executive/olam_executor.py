@@ -171,7 +171,7 @@ if __name__ == '__main__':
         sys.exit(2)
 
     rospy.init_node('olam_test')
-    olam = ActionExecutor('hector')
+    olam = ActionExecutor('corin')
     id_to_act = {
         0: olam.reset_controller,
         1: olam.engagement_position,

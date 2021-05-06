@@ -419,11 +419,13 @@ class PlannerInterface(object):
                 irr = [i for i in self.irrs if i.namespace == irr_name[0]][0]
                 start = rospy.Time.now()
                 if msg.name == 'irr_navigate':
-                    self._action(msg, irr.navigate, [duration])
+                    # self._action(msg, irr.navigate, [duration])
+                    self._action(msg, irr.real_navigation, [duration])
                 elif msg.name == 'uav_retrieve_irr':
                     self.irr_retrieval(msg, irr, duration)
                 elif msg.name in ['irr_ndt_inspect', 'irr_repair_wt']:
-                    self._action(msg, irr.rotate, [180., duration])
+                    # self._action(msg, irr.rotate, [180., duration])
+                    self._action(msg, irr.real_navigation, [duration])
                 self.update_action_duration(rospy.Time.now() - start,
                                             msg.parameters)
                 self.update_predicates(
@@ -480,10 +482,11 @@ class PlannerInterface(object):
             if 'irr' in param.value
         ]
         wps = [wps[0], wps[0]] if len(wps) == 1 else wps
-        idx, conn = [(idx, i) for idx, i in enumerate(self.connections)
-                     if set(i[:2]) == set(wps)][-1]
-        new_mean = ((float(conn[2]) / conn[3]**2) +
-                    (x / std_dev_likelihood**2)) / (
-                        (1. / conn[3]**2) + (1. / std_dev_likelihood**2))
-        new_std = 1. / ((1. / conn[3]**2) + (1. / std_dev_likelihood**2))
-        self.connections[idx] = [wps[0], wps[1], new_mean, new_std]
+        connections = [(idx, i) for idx, i in enumerate(self.connections)
+                       if set(i[:2]) == set(wps)]
+        for idx, conn in connections:
+            new_mean = ((float(conn[2]) / conn[3]**2) +
+                        (x / std_dev_likelihood**2)) / (
+                            (1. / conn[3]**2) + (1. / std_dev_likelihood**2))
+            new_std = 1. / ((1. / conn[3]**2) + (1. / std_dev_likelihood**2))
+            self.connections[idx] = [wps[0], wps[1], new_mean, new_std]

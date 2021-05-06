@@ -197,7 +197,7 @@ class ActionExecutor(object):
         offset = degree / 180. * np.pi
         buttons = Joy()
         buttons.header.stamp = rospy.Time.now()
-        buttons.header.frame_id = 'map'
+        buttons.header.frame_id = 'base_link'
         buttons.axes = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
         buttons.buttons = [0, 0, 1, 0, 0, 0, 0, 0, 0]
         for _ in range(3):
@@ -220,12 +220,14 @@ class ActionExecutor(object):
         """
         Prepare for engagement by the drone
         """
-        response = self.ACTION_FAIL
-        if hasattr(self, 'olam'):
-            response = self.olam.engagement_position(duration)
-        elif "simulation" in rospy.get_param("~scenario_type", "simulation"):
-            self.embrace_pose()
-            response = self.ACTION_SUCCESS
+        # response = self.ACTION_FAIL
+        # if hasattr(self, 'olam'):
+        #     response = self.olam.engagement_position(duration)
+        # elif "simulation" in rospy.get_param("~scenario_type", "simulation"):
+        #     self.embrace_pose()
+        #     response = self.ACTION_SUCCESS
+        rospy.sleep(1)
+        response = self.ACTION_SUCCESS
         return response
 
     def navigate(self, duration=rospy.Duration(600, 0)):
@@ -258,7 +260,7 @@ class ActionExecutor(object):
         self.set_current_location_as_home()
         buttons = Joy()
         buttons.header.stamp = rospy.Time.now()
-        buttons.header.frame_id = 'map'
+        buttons.header.frame_id = 'base_link'
         buttons.axes = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         buttons.buttons = [0, 0, 1, 0, 0, 0, 0, 0, 0]
         for _ in range(3):

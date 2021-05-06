@@ -2,7 +2,7 @@ plugin_blacklist:
 # common
 - actuator_control
 - ftp
-- safety_area
+# - safety_area
 - hil
 # extras
 - altitude

@@ -52,7 +52,7 @@ class ActionExecutor(object):
             CommandStatus.UNKNOWN, CommandStatus.UNKNOWN, CommandStatus.UNKNOWN
         ]
         self.external_intervened = False
-        self._hinge_failing = [False for _ in range(5)]
+        self._hinge_failing = [False for _ in range(10)]
         self._rate = rospy.Rate(updated_frequency)
         # Service proxies
         rospy.loginfo("Waiting for /%s/mavros/button_change/send ..." %
@@ -102,7 +102,7 @@ class ActionExecutor(object):
             self.status = list(map(int, msg.data))
             self._hinge_failing.append(self.status[0] == CommandStatus.ERROR)
             self._hinge_failing = self._hinge_failing[1:]
-            rospy.logwarn("LHM DEBUG_VECT: %s" % str(self.status))
+            # rospy.logwarn("LHM DEBUG_VECT: %s" % str(self.status))
         if not (False in self._hinge_failing):
             rospy.logerr("Hinge in %s is damaged!" % self.namespace)
         return
@@ -149,6 +149,26 @@ class ActionExecutor(object):
             self._rate.sleep()
 
         response = int(achieved and (False in self._hinge_failing))
+        rospy.loginfo("%s action is %s" % (self.namespace, bool(response)))
+        if (rospy.Time.now() - start) > duration:
+            response = self.OUT_OF_DURATION
+        elif self.external_intervened:
+            response = self.EXTERNAL_INTERVENTION
+        return response
+
+    def _action_without_status_check(self, duration=rospy.Duration(60, 0)):
+        start = rospy.Time.now()
+        requested = False
+        while not requested and (not self.external_intervened) and (
+                not rospy.is_shutdown()):
+            if (rospy.Time.now() - start >= duration) or ({True} == set(
+                    self._hinge_failing)):
+                break
+            requested = self._request_via_srv(self.command)
+            self._rate.sleep()
+
+        response = int(requested and (False in self._hinge_failing))
+        rospy.loginfo("%s action is %s" % (self.namespace, bool(response)))
         if (rospy.Time.now() - start) > duration:
             response = self.OUT_OF_DURATION
         elif self.external_intervened:
@@ -211,7 +231,7 @@ if __name__ == '__main__':
         sys.exit(2)
 
     rospy.init_node('lhm_test')
-    lhm = ActionExecutor('hector')
+    lhm = ActionExecutor('halcyon')
     id_to_act = {
         0: lhm.takeoff_preparation,
         1: lhm.landing_preparation,
@@ -220,6 +240,7 @@ if __name__ == '__main__':
         4: lhm.open_hook,
         5: lhm.reset_controller
     }
+    rospy.sleep(1)
     for i in sys.argv[1].replace(" ", "").split(","):
         success = id_to_act[int(i)](rospy.Duration(30))
         print("SUCCESS:", success)

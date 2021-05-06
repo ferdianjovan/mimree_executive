@@ -533,10 +533,11 @@ class PlannerInterface(object):
             if 'asv' in param.value
         ]
         wps = [wps[0], wps[0]] if len(wps) == 1 else wps
-        idx, conn = [(idx, i) for idx, i in enumerate(self.connections)
-                     if set(i[:2]) == set(wps)][-1]
-        new_mean = ((float(conn[2]) / conn[3]**2) +
-                    (x / std_dev_likelihood**2)) / (
-                        (1. / conn[3]**2) + (1. / std_dev_likelihood**2))
-        new_std = 1. / ((1. / conn[3]**2) + (1. / std_dev_likelihood**2))
-        self.connections[idx] = [wps[0], wps[1], new_mean, new_std]
+        connections = [(idx, i) for idx, i in enumerate(self.connections)
+                       if set(i[:2]) == set(wps)]
+        for idx, conn in connections:
+            new_mean = ((float(conn[2]) / conn[3]**2) +
+                        (x / std_dev_likelihood**2)) / (
+                            (1. / conn[3]**2) + (1. / std_dev_likelihood**2))
+            new_std = 1. / ((1. / conn[3]**2) + (1. / std_dev_likelihood**2))
+            self.connections[idx] = [wps[0], wps[1], new_mean, new_std]
