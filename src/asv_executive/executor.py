@@ -76,7 +76,7 @@ class ActionExecutor(object):
             }
             self._uav_home_pose_pub = {
                 uav: rospy.Publisher(
-                    '/%s_launchpad/mavros/global_position/global' % uav,
+                    '/%s_launchpad/mavros/global_position/raw/unfix' % uav,
                     NavSatFix,
                     queue_size=3)
                 for uav in namespace['uav_onboard']
@@ -118,7 +118,8 @@ class ActionExecutor(object):
                          BatteryState,
                          self._battery_cb,
                          queue_size=1)
-        rospy.Subscriber('/%s/mavros/global_position/global' % self.namespace,
+        rospy.Subscriber('/%s/mavros/global_position/raw/unfix' %
+                         self.namespace,
                          NavSatFix,
                          self._global_pose_cb,
                          queue_size=1)
@@ -380,8 +381,7 @@ class ActionExecutor(object):
                                                 duration=duration)
         rospy.loginfo("%s is reaching waypoint %d, lat: %.5f, long: %.5f" %
                       (self.namespace, waypoint, wp['lat'], wp['long']))
-        if reached_original == self.ACTION_SUCCESS:
-            self.calculate_fuel_rate(init_fuel, start, self.fuel_rate_std)
+        self.calculate_fuel_rate(init_fuel, start, self.fuel_rate_std)
         return reached_original
 
     def goto_coordinate(self,
@@ -446,8 +446,7 @@ class ActionExecutor(object):
         original.yaw_rate = 2.0
         rospy.loginfo("%s is scanning a wind turbine..." % self.namespace)
         first_blade = self.blade_inspect(original, [0.0, 90.0, 0.0], duration)
-        if first_blade == self.ACTION_SUCCESS:
-            self.calculate_fuel_rate(fuel, start, self.fuel_rate_std)
+        self.calculate_fuel_rate(fuel, start, self.fuel_rate_std)
         rospy.loginfo("%s has done the inspection..." % self.namespace)
         return first_blade
 

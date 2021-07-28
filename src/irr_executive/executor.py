@@ -183,8 +183,7 @@ class ActionExecutor(object):
             response = self.simulated_rotation(degree, duration)
         else:
             response = self.real_navigation(duration)
-        if response == self.ACTION_SUCCESS:
-            self.calculate_fuel_rate(fuel, start, self.fuel_rate_std)
+        self.calculate_fuel_rate(fuel, start, self.fuel_rate_std)
         return response
 
     def simulated_rotation(self, degree, duration=rospy.Duration(60, 0)):
@@ -220,14 +219,12 @@ class ActionExecutor(object):
         """
         Prepare for engagement by the drone
         """
-        # response = self.ACTION_FAIL
-        # if hasattr(self, 'olam'):
-        #     response = self.olam.engagement_position(duration)
-        # elif "simulation" in rospy.get_param("~scenario_type", "simulation"):
-        #     self.embrace_pose()
-        #     response = self.ACTION_SUCCESS
-        rospy.sleep(1)
-        response = self.ACTION_SUCCESS
+        response = self.ACTION_FAIL
+        if hasattr(self, 'olam'):
+            response = self.olam.engagement_position(duration)
+        elif "simulation" in rospy.get_param("~scenario_type", "simulation"):
+            self.embrace_pose()
+            response = self.ACTION_SUCCESS
         return response
 
     def navigate(self, duration=rospy.Duration(600, 0)):
@@ -240,15 +237,14 @@ class ActionExecutor(object):
             response = self.simulated_navigation(duration)
         else:
             response = self.real_navigation(duration)
-        if response == self.ACTION_SUCCESS:
-            self.calculate_fuel_rate(fuel, start, self.fuel_rate_std)
+        self.calculate_fuel_rate(fuel, start, self.fuel_rate_std)
         return response
 
     def real_navigation(self, duration=rospy.Duration(600, 0)):
         """
         Retrieving a crawler in real world
         """
-        rospy.sleep(3.0)
+        rospy.sleep(1.0)
         return self.ACTION_SUCCESS
 
     def simulated_navigation(self, duration=rospy.Duration(60, 0)):

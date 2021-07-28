@@ -16,11 +16,13 @@ class CommandStatus(object):
     CLOSE_HOOK = 66
     OPEN_HOOK = 67
     RESET = 71
+    RESET_HARDWARE = 72
 
     # General status
     UNKNOWN = 0
     OFFLINE = 1
     ERROR = 2
+    SERVO_HARDWARE_ERROR = 3
 
     HINGE_TORQUE_OFF = 10
     HINGE_TAKEOFF = 20
@@ -44,6 +46,7 @@ class ActionExecutor(object):
     TARGET_COMPID = 55
 
     def __init__(self, namespace, updated_frequency=10):
+        self.message_timestamp = rospy.Time.now()
         # connection through mavros
         self.namespace = namespace
         self.command = CommandStatus.UNKNOWN
@@ -53,6 +56,7 @@ class ActionExecutor(object):
         ]
         self.external_intervened = False
         self._hinge_failing = [False for _ in range(10)]
+        self._hinge_hardware = [False for _ in range(10)]
         self._rate = rospy.Rate(updated_frequency)
         # Service proxies
         rospy.loginfo("Waiting for /%s/mavros/button_change/send ..." %
@@ -70,6 +74,16 @@ class ActionExecutor(object):
         # Service to run other commands
         rospy.Service('%s/lhm/send' % self.namespace, SetMode,
                       self.execute_command)
+        # checking connection with lhm
+        rospy.Timer(self._rate.sleep_dur * 10, self._check_connection)
+
+    def _check_connection(self, event):
+        """
+        Check connection with LHM
+        """
+        if rospy.Time.now() - self.message_timestamp > rospy.Duration(3, 0):
+            rospy.logerr("LOSING CONNECTION WITH LHM MODULE ...")
+        return
 
     def execute_command(self, req):
         """
@@ -90,6 +104,9 @@ class ActionExecutor(object):
             response = self.close_hook()
         elif req.base_mode == 5 or req.custom_mode.upper() == 'open'.upper():
             response = self.open_hook()
+        elif req.base_mode == 6 or req.custom_mode.upper() == 'poweroff'.upper(
+        ):
+            response = self.poweroff()
         return response == self.ACTION_SUCCESS
 
     def _debug_cb(self, msg):
@@ -98,26 +115,30 @@ class ActionExecutor(object):
                     header, index, name, value_float, value_int, *data, type
             )
         """
+        self.message_timestamp = rospy.Time.now()
         if msg.name == 'LHMS':
             self.status = list(map(int, msg.data))
             self._hinge_failing.append(self.status[0] == CommandStatus.ERROR)
             self._hinge_failing = self._hinge_failing[1:]
-            # rospy.logwarn("LHM DEBUG_VECT: %s" % str(self.status))
+            self._hinge_hardware.append(
+                self.status[0] == CommandStatus.SERVO_HARDWARE_ERROR)
+            self._hinge_hardware = self._hinge_hardware[1:]
         if not (False in self._hinge_failing):
             rospy.logerr("Hinge in %s is damaged!" % self.namespace)
+        if not (False in self._hinge_hardware):
+            rospy.logerr("Hardware failure on the hinge of %s" %
+                         self.namespace)
         return
 
     def _request_via_srv(self, command):
-        start = rospy.Time.now()
         response = self._button_proxy(
             1, 64218375, command,
             rospy.get_param("/%s/mavros/target_system_id" % self.namespace, 1),
             self.TARGET_COMPID)
-        end = rospy.Time.now()
         requested = response.result == 1
-        rospy.logwarn("REQUEST %d: %s, ACK_DUR: %d.%d" %
-                      (command, str(response.result), (end - start).secs,
-                       (end - start).nsecs))
+        # rospy.logwarn("REQUEST %d: %s, ACK_DUR: %d.%d" %
+        #               (command, str(response.result), (end - start).secs,
+        #                (end - start).nsecs))
         return requested
 
     def _action(self,
@@ -136,7 +157,8 @@ class ActionExecutor(object):
         while not achieved and (not self.external_intervened) and (
                 not rospy.is_shutdown()):
             if (rospy.Time.now() - start >= duration) or ({True} == set(
-                    self._hinge_failing)):
+                    self._hinge_failing)) or ({True} == set(
+                        self._hinge_hardware)):
                 break
             if not (requested or (transitioning and transition)):
                 requested = True if (
@@ -148,7 +170,8 @@ class ActionExecutor(object):
             achieved = self.status[status_idx] == target_cond
             self._rate.sleep()
 
-        response = int(achieved and (False in self._hinge_failing))
+        # response = int(achieved and (False in self._hinge_failing))
+        response = int(achieved)
         rospy.loginfo("%s action is %s" % (self.namespace, bool(response)))
         if (rospy.Time.now() - start) > duration:
             response = self.OUT_OF_DURATION
@@ -162,12 +185,14 @@ class ActionExecutor(object):
         while not requested and (not self.external_intervened) and (
                 not rospy.is_shutdown()):
             if (rospy.Time.now() - start >= duration) or ({True} == set(
-                    self._hinge_failing)):
+                    self._hinge_failing)) or ({True} == set(
+                        self._hinge_hardware)):
                 break
             requested = self._request_via_srv(self.command)
             self._rate.sleep()
 
-        response = int(requested and (False in self._hinge_failing))
+        response = int(requested)
+        # response = int(requested and (False in self._hinge_failing))
         rospy.loginfo("%s action is %s" % (self.namespace, bool(response)))
         if (rospy.Time.now() - start) > duration:
             response = self.OUT_OF_DURATION
@@ -192,6 +217,14 @@ class ActionExecutor(object):
             Takeoff preparation by folding the hinge
         """
         rospy.loginfo("Bending hinge for taking-off...")
+        self.command = CommandStatus.TAKEOFF_MODE
+        return self._action(CommandStatus.HINGE_TAKEOFF, 0, duration=duration)
+
+    def poweroff(self, duration=rospy.Duration(60, 0)):
+        """
+            Poweroff the folding arm
+        """
+        rospy.loginfo("Powering off the LHM ...")
         self.command = CommandStatus.TAKEOFF_MODE
         return self._action(CommandStatus.HINGE_TAKEOFF, 0, duration=duration)
 
@@ -231,7 +264,10 @@ if __name__ == '__main__':
         sys.exit(2)
 
     rospy.init_node('lhm_test')
-    lhm = ActionExecutor('halcyon')
+    if len(sys.argv) > 2:
+        lhm = ActionExecutor(sys.argv[2])
+    else:
+        lhm = ActionExecutor('halcyon')
     id_to_act = {
         0: lhm.takeoff_preparation,
         1: lhm.landing_preparation,

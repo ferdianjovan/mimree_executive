@@ -136,6 +136,7 @@ class MissionExec(object):
         """
         if msg.status == 'action out of duration':
             self.cancel_plan(Empty())
+            rospy.sleep(self._rate.sleep_dur * 30)
             self.resume_plan(Empty())
 
     def _get_metric_optimisation(self):
@@ -336,6 +337,6 @@ if __name__ == '__main__':
     args = parser_arg.parse_args(sys.argv[1:7])
     mission_exec = MissionExec(args.config_file, args.config_mission)
     if mission_exec.add_mission(args.mission):
-        if mission_exec.launch():
-            mission_exec.update_weight()
+        mission_exec.launch()
+        mission_exec.update_weight()
     rospy.spin()

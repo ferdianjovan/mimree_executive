@@ -419,13 +419,11 @@ class PlannerInterface(object):
                 irr = [i for i in self.irrs if i.namespace == irr_name[0]][0]
                 start = rospy.Time.now()
                 if msg.name == 'irr_navigate':
-                    # self._action(msg, irr.navigate, [duration])
-                    self._action(msg, irr.real_navigation, [duration])
+                    self._action(msg, irr.navigate, [duration])
                 elif msg.name == 'uav_retrieve_irr':
                     self.irr_retrieval(msg, irr, duration)
                 elif msg.name in ['irr_ndt_inspect', 'irr_repair_wt']:
-                    # self._action(msg, irr.rotate, [180., duration])
-                    self._action(msg, irr.real_navigation, [duration])
+                    self._action(msg, irr.rotate, [180., duration])
                 self.update_action_duration(rospy.Time.now() - start,
                                             msg.parameters)
                 self.update_predicates(

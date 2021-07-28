@@ -1,23 +1,11 @@
-- config: flytest_fenswood
-  uavs: 
-    - hector
-  uav_waypoints:
-      - {hold_time: 2.0, radius: 1.0, yaw: 0.0, lat: 51.423577, long: -2.670798, rel_alt:  15.0, inspect: False}
-  asvs:
-    - halcyon
-  uav_carrier: halcyon
-  asv_waypoints:
-    - {hold_time: 2.0, radius: 2.0, yaw: 0.0, lat: 51.423366, long: -2.671206, takeoff: False}
-    - {hold_time: 2.0, radius: 2.0, yaw: 0.0, lat: 51.423319, long: -2.671582, takeoff: False}
-
 - config: retrieve_irr
   uavs: 
       - {
-          name: hector, fuel_rate: [0.0001, 0.00002], min_fuel: 14.4, max_fuel: 16.8, 
+          name: hector, fuel_rate: [0.0001, 0.00002], min_fuel: 13.0, max_fuel: 16.8, 
           deploy_system: false, retrieve_system: true, camera_system: false, irr_attached: ''
         }
   uav_waypoints:
-      - {yaw: 0.0, lat: 51.423577, long: -2.670798, rel_alt:  10.0}
+      - {yaw: 210.0, lat: 51.42410501, long: -2.67011467, rel_alt:  10.0}
   uav_waypoint_to_wt: {WT1: 1}
   uav_waypoint_connection: [
       [0, 0, 210., 30.], [0, 1, 180., 45.], [1, 1, 510, 45]
@@ -31,7 +19,7 @@
           name: corin, fuel_rate: [0.01, 0.05], min_fuel: 10.0, max_fuel: 100.0, ndt_system: True, repair_arm: False
         }
   irr_waypoints:
-      - {yaw: 0.0, lat: 51.423577, long: -2.670798, repair: False, inspect: True}
+      - {yaw: 0.0, lat: 51.42410501, long: -2.67011467, repair: False, inspect: True}
   irr_waypoint_to_wt: {WT1: 1}
   irr_waypoint_connection: [
       [0, 0, 20.0, 4.], [0, 1, 300.0, 60.0], [1, 1, 300.0, 60.0]
@@ -40,11 +28,11 @@
 - config: deploy_irr
   uavs: 
       - {
-          name: hector, fuel_rate: [0.0001, 0.00002], min_fuel: 14.4, max_fuel: 16.8, 
+          name: hector, fuel_rate: [0.0001, 0.00002], min_fuel: 13.4, max_fuel: 16.8, 
           deploy_system: true, retrieve_system: false, camera_system: false, irr_attached: corin
         }
   uav_waypoints:
-      - {yaw: 0.0, lat: 51.423577, long: -2.670798, rel_alt:  10.0}
+      - {yaw: 210.0, lat: 51.42410501, long: -2.67011467, rel_alt:  10.0}
   uav_waypoint_to_wt: {WT1: 1}
   uav_waypoint_connection: [
       [0, 0, 210., 30.], [0, 1, 180., 45.], [1, 1, 510, 45]
@@ -58,7 +46,7 @@
           name: corin, fuel_rate: [0.01, 0.05], min_fuel: 10.0, max_fuel: 100.0, ndt_system: True, repair_arm: False
         }
   irr_waypoints:
-      - {yaw: 0.0, lat: 51.423577, long: -2.670798, repair: False, inspect: True}
+      - {yaw: 0.0, lat: 51.42410501, long: -2.67011467, repair: False, inspect: True}
   irr_waypoint_to_wt: {WT1: 1}
   irr_waypoint_connection: [
       [0, 0, 20.0, 4.], [0, 1, 300.0, 60.0], [1, 1, 300.0, 60.0]

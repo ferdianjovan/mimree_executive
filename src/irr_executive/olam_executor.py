@@ -97,7 +97,6 @@ class ActionExecutor(object):
         """
         if msg.name == 'OLAMS':
             self.status = list(map(int, msg.data))
-            rospy.logwarn("OLAM DEBUG_VECT: %s" % str(self.status))
         return
 
     def _request_via_srv(self, command):
@@ -111,9 +110,6 @@ class ActionExecutor(object):
         requested = response.result == 1
         requested = True if (not requested) and (
             (end - start) > rospy.Duration(5, 0)) else requested
-        rospy.logwarn("REQUEST %d: %s, ACK_DUR: %d.%d, SEQ: %d" %
-                      (command, str(response.result), (end - start).secs,
-                       (end - start).nsecs, self.command_sequence))
         return requested
 
     def _action(self, duration=rospy.Duration(60, 0)):

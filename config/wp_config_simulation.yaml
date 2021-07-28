@@ -117,7 +117,7 @@
           deploy_system: false, retrieve_system: true, camera_system: false, irr_attached: ''
         }
   uav_waypoints:
-      - {yaw: 0.0, lat: 43.798834, long: 28.5936459, rel_alt:  5.0}
+      - {yaw: 0.0, lat: 43.7993805, long: 28.5936459, rel_alt:  100.0}
   uav_waypoint_to_wt: {WT1: 1}
   uav_waypoint_connection: [
       [0, 0, 180., 30.], [0, 1, 120., 45.], [1, 1, 510, 45]
