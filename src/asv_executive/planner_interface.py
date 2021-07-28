@@ -162,6 +162,8 @@ class PlannerInterface(object):
             rospy.logwarn(
                 "External intervention is detected, cancelling mission!")
             self.publish_feedback(action_dispatch.action_id, 'action failed')
+        else:
+            self.publish_feedback(action_dispatch.action_id, 'action failed')
 
     def _fuel_update(self, event):
         """
@@ -517,7 +519,7 @@ class PlannerInterface(object):
             max_duration = rospy.Duration(
                 norm.ppf(0.95, loc=float(conn[0]), scale=float(conn[1])))
         except IndexError:
-            max_duration = duration
+            max_duration = rospy.Duration(secs=int(duration))
         return max_duration
 
     def update_action_duration(self,

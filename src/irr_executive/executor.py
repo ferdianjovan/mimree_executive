@@ -40,7 +40,7 @@ class ActionExecutor(object):
         self.global_pose = NavSatFix()
         self.heading = 0.0
         self._current_wp = -1
-        self._radius = 1e-05
+        self._radius = 2e-06
         self._rate = rospy.Rate(update_frequency)
         # Subscribers
         rospy.Subscriber('/%s/mavros/global_position/compass_hdg' %
@@ -130,14 +130,17 @@ class ActionExecutor(object):
         """
         Calculate fuel rate consumption
         """
-        x = float(init_fuel - self.fuel)
-        x = x / (rospy.Time.now() - init_time).secs
-        self.fuel_rate_mean = (
-            (float(self.fuel_rate_mean) / self.fuel_rate_std**2) +
-            (x / std_dev_likelihood**2)) / ((1. / self.fuel_rate_std**2) +
-                                            (1. / std_dev_likelihood**2))
-        self.fuel_rate_std = 1. / ((1. / self.fuel_rate_std**2) +
-                                   (1. / std_dev_likelihood))
+        try:
+            x = float(init_fuel - self.fuel)
+            x = x / (rospy.Time.now() - init_time).secs
+            self.fuel_rate_mean = (
+                (float(self.fuel_rate_mean) / self.fuel_rate_std**2) +
+                (x / std_dev_likelihood**2)) / ((1. / self.fuel_rate_std**2) +
+                                                (1. / std_dev_likelihood**2))
+            self.fuel_rate_std = 1. / ((1. / self.fuel_rate_std**2) +
+                                       (1. / std_dev_likelihood))
+        except ZeroDivisionError:
+            return
 
     def intervene_observer(self, event):
         """
@@ -197,7 +200,7 @@ class ActionExecutor(object):
         buttons = Joy()
         buttons.header.stamp = rospy.Time.now()
         buttons.header.frame_id = 'base_link'
-        buttons.axes = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        buttons.axes = [0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0]
         buttons.buttons = [0, 0, 1, 0, 0, 0, 0, 0, 0]
         for _ in range(3):
             self._setpoint_pub.publish(buttons)
@@ -206,7 +209,7 @@ class ActionExecutor(object):
                 not rospy.is_shutdown()) and (not self.external_intervened):
             current_heading = self.heading
             if abs(current_heading - heading) > offset:
-                self.embrace_pose()
+                # self.embrace_pose()
                 response = self.ACTION_SUCCESS
                 break
         if (rospy.Time.now() - start) > duration:
@@ -227,14 +230,14 @@ class ActionExecutor(object):
             response = self.ACTION_SUCCESS
         return response
 
-    def navigate(self, duration=rospy.Duration(600, 0)):
+    def navigate(self, forward=True, duration=rospy.Duration(600, 0)):
         """
         Retrieving a crawler
         """
         fuel = self.fuel
         start = rospy.Time.now()
         if "simulation" in rospy.get_param("~scenario_type", "simulation"):
-            response = self.simulated_navigation(duration)
+            response = self.simulated_navigation(forward, duration)
         else:
             response = self.real_navigation(duration)
         self.calculate_fuel_rate(fuel, start, self.fuel_rate_std)
@@ -247,7 +250,9 @@ class ActionExecutor(object):
         rospy.sleep(1.0)
         return self.ACTION_SUCCESS
 
-    def simulated_navigation(self, duration=rospy.Duration(60, 0)):
+    def simulated_navigation(self,
+                             forward=True,
+                             duration=rospy.Duration(60, 0)):
         """
         Walk for 1 meter
         """
@@ -257,7 +262,8 @@ class ActionExecutor(object):
         buttons = Joy()
         buttons.header.stamp = rospy.Time.now()
         buttons.header.frame_id = 'base_link'
-        buttons.axes = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        direction = 1.0 if forward else -1.0
+        buttons.axes = [0.0, direction, 0.0, 0.0, 0.0, 0.0, 0.0]
         buttons.buttons = [0, 0, 1, 0, 0, 0, 0, 0, 0]
         for _ in range(3):
             self._setpoint_pub.publish(buttons)
@@ -268,7 +274,7 @@ class ActionExecutor(object):
             cur_pos = np.array(
                 [self.global_pose.latitude, self.global_pose.longitude])
             if np.linalg.norm(cur_pos - home_pos) > self._radius:
-                self.embrace_pose()
+                # self.embrace_pose()
                 response = self.ACTION_SUCCESS
                 break
         if (rospy.Time.now() - start) > duration:

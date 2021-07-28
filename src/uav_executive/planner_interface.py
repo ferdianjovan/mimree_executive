@@ -465,12 +465,11 @@ class PlannerInterface(object):
         for idx, msg in enumerate(self.dispatch_actions):
             if msg.action_id != self.action_sequence:
                 continue
-            duration = rospy.Duration(secs=int(msg.duration))
-            # duration = self.get_max_action_duration(msg.parameters,
-            #                                         msg.duration)
-            # print(
-            #     "params: %s, recommended: %.5f, max: %d.%d" %
-            #     (msg.parameters, msg.duration, duration.secs, duration.nsecs))
+            duration = self.get_max_action_duration(msg.parameters,
+                                                    msg.duration)
+            print(
+                "params: %s, recommended: %.5f, max: %d.%d" %
+                (msg.parameters, msg.duration, duration.secs, duration.nsecs))
             # parse action message
             uav_names = [uav.namespace for uav in self.uavs]
             uav_name = [
@@ -485,14 +484,7 @@ class PlannerInterface(object):
                         msg, uav.takeoff,
                         [rospy.get_param('~takeoff_altitude', 10.), duration])
                 elif msg.name == 'uav_land':
-                    # if "retrieve" in rospy.get_param("~scenario_type",
-                    #                                  "simulation"):
-                    #     self._action(msg, uav.dropping_irr_and_land,
-                    #                  [duration])
-                    # else:
-                    #     self._action(msg, uav.return_to_launch,
-                    #                  [True, duration])
-                    self._action(msg, uav.return_to_launch, [False, duration])
+                    self._action(msg, uav.return_to_launch, [True, duration])
                 elif msg.name == 'uav_navigate':
                     self._action(msg, self.goto_waypoint,
                                  [uav, msg.parameters, duration])
@@ -595,7 +587,7 @@ class PlannerInterface(object):
             max_duration = rospy.Duration(
                 norm.ppf(0.95, loc=float(conn[0]), scale=float(conn[1])))
         except IndexError:
-            max_duration = duration
+            max_duration = rospy.Duration(secs=int(duration))
         return max_duration
 
     def update_action_duration(self,

@@ -161,6 +161,8 @@ class PlannerInterface(object):
             rospy.logwarn(
                 "External intervention is detected, cancelling mission!")
             self.publish_feedback(action_dispatch.action_id, 'action failed')
+        else:
+            self.publish_feedback(action_dispatch.action_id, 'action failed')
 
     def publish_feedback(self, action_id, fbstatus):
         """
@@ -419,11 +421,11 @@ class PlannerInterface(object):
                 irr = [i for i in self.irrs if i.namespace == irr_name[0]][0]
                 start = rospy.Time.now()
                 if msg.name == 'irr_navigate':
-                    self._action(msg, irr.navigate, [duration])
+                    self._action(msg, irr.navigate, [True, duration])
                 elif msg.name == 'uav_retrieve_irr':
                     self.irr_retrieval(msg, irr, duration)
                 elif msg.name in ['irr_ndt_inspect', 'irr_repair_wt']:
-                    self._action(msg, irr.rotate, [180., duration])
+                    self._action(msg, irr.navigate, [False, duration])
                 self.update_action_duration(rospy.Time.now() - start,
                                             msg.parameters)
                 self.update_predicates(
@@ -464,7 +466,7 @@ class PlannerInterface(object):
             max_duration = rospy.Duration(
                 norm.ppf(0.95, loc=float(conn[0]), scale=float(conn[1])))
         except IndexError:
-            max_duration = duration
+            max_duration = rospy.Duration(secs=int(duration))
         return max_duration
 
     def update_action_duration(self,
