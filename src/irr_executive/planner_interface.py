@@ -2,6 +2,7 @@
 
 # 3rd Party Packages
 import re
+import numpy as np
 from threading import Lock
 
 # ROS Packages
@@ -32,6 +33,7 @@ class PlannerInterface(object):
         A Class that interfaces with ROSPlan for dispatching irr actions and
         updating irr knowledge during a mission
         """
+        self.direction = False
         self.action_sequence = 0
         self.wt_to_wp = wt_to_wp
         self.waypoints = irr_waypoints
@@ -163,6 +165,7 @@ class PlannerInterface(object):
             self.publish_feedback(action_dispatch.action_id, 'action failed')
         else:
             self.publish_feedback(action_dispatch.action_id, 'action failed')
+        return True
 
     def publish_feedback(self, action_id, fbstatus):
         """
@@ -210,8 +213,7 @@ class PlannerInterface(object):
             succeed = succeed and self.update_functions(['min_dur'], [[
                 KeyValue('wp1', 'irr_wp' + str(i[0])),
                 KeyValue('wp2', 'irr_wp' + str(i[1]))
-            ]], [norm.ppf(0.05, loc=float(i[2]), scale=float(i[3]))
-                 ], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
+            ]], [float(i[2])], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             # add max action duration on the wp connection
             succeed = succeed and self.update_functions(['max_dur'], [[
                 KeyValue('wp1', 'irr_wp' + str(i[0])),
@@ -417,20 +419,37 @@ class PlannerInterface(object):
                 parm.value for parm in msg.parameters
                 if parm.value in irr_names
             ]
+            action_executed = False
             if len(irr_name):
                 irr = [i for i in self.irrs if i.namespace == irr_name[0]][0]
+                duration = self.get_max_action_duration(
+                    msg.parameters, msg.duration)
+                # print("params: %s, recommended: %.5f, max: %d.%d" %
+                #       (msg.parameters, msg.duration, duration.secs,
+                #        duration.nsecs))
                 start = rospy.Time.now()
                 if msg.name == 'irr_navigate':
-                    self._action(msg, irr.navigate, [True, duration])
+                    action_executed = self._action(msg, irr.real_navigation,
+                                                   [duration])
+                    # if not self.direction:
+                    #     action_executed = self._action(
+                    #         msg, irr.navigate, [self.direction, duration])
+                    # else:
+                    #     action_executed = self._action(msg,
+                    #                                    irr.real_navigation,
+                    #                                    [duration])
+                    # self.direction = not self.direction
                 elif msg.name == 'uav_retrieve_irr':
-                    self.irr_retrieval(msg, irr, duration)
+                    action_executed = self.irr_retrieval(msg, irr, duration)
                 elif msg.name in ['irr_ndt_inspect', 'irr_repair_wt']:
-                    self._action(msg, irr.navigate, [False, duration])
-                self.update_action_duration(rospy.Time.now() - start,
-                                            msg.parameters)
-                self.update_predicates(
-                    ['idle'], [[KeyValue('v', irr.namespace)]],
-                    [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
+                    action_executed = self._action(msg, irr.real_navigation,
+                                                   [duration])
+                if action_executed:
+                    self.update_action_duration(rospy.Time.now() - start,
+                                                msg.parameters)
+                    self.update_predicates(
+                        ['idle'], [[KeyValue('v', irr.namespace)]],
+                        [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             msg_executed = True
             break
         if msg_executed:
@@ -465,6 +484,9 @@ class PlannerInterface(object):
             ][-1]
             max_duration = rospy.Duration(
                 norm.ppf(0.95, loc=float(conn[0]), scale=float(conn[1])))
+            # print("wps: %s, conn: %s, max: %.5f" %
+            #       (str(wps), str(conn),
+            #        norm.ppf(0.95, loc=float(conn[0]), scale=float(conn[1]))))
         except IndexError:
             max_duration = rospy.Duration(secs=int(duration))
         return max_duration
@@ -472,7 +494,7 @@ class PlannerInterface(object):
     def update_action_duration(self,
                                duration,
                                parameters,
-                               std_dev_likelihood=1.0):
+                               std_dev_likelihood=15.0):
         """
         Update average and variance of the action duration
         """
@@ -484,9 +506,10 @@ class PlannerInterface(object):
         wps = [wps[0], wps[0]] if len(wps) == 1 else wps
         connections = [(idx, i) for idx, i in enumerate(self.connections)
                        if set(i[:2]) == set(wps)]
+        # print(connections)
         for idx, conn in connections:
-            new_mean = ((float(conn[2]) / conn[3]**2) +
-                        (x / std_dev_likelihood**2)) / (
-                            (1. / conn[3]**2) + (1. / std_dev_likelihood**2))
             new_std = 1. / ((1. / conn[3]**2) + (1. / std_dev_likelihood**2))
+            new_mean = ((float(conn[2]) / conn[3]**2) +
+                        (x / std_dev_likelihood**2)) * new_std
             self.connections[idx] = [wps[0], wps[1], new_mean, new_std]
+            # print(self.connections[idx])

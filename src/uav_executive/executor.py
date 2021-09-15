@@ -43,9 +43,9 @@ def xy_to_longlat(x, y, latitude):
 
 class ActionExecutor(object):
 
-    MINIMUM_VOLTAGE = 12.19
-    MINIMUM_ALTITUDE = 0.5
-    INIT_VOLTAGE = 12.587
+    MINIMUM_VOLTAGE = 10.0
+    MINIMUM_ALTITUDE = 0.2
+    INIT_VOLTAGE = 100.0
     EXTERNAL_INTERVENTION = -2
     OUT_OF_DURATION = -1
     ACTION_SUCCESS = 1
@@ -123,7 +123,7 @@ class ActionExecutor(object):
                          Float64,
                          self._relative_alt_cb,
                          queue_size=1)
-        rospy.Subscriber('/%s/mavros/battery' % self.namespace,
+        rospy.Subscriber('/%s/mavros/modified_battery' % self.namespace,
                          BatteryState,
                          self._battery_cb,
                          queue_size=1)
@@ -263,12 +263,17 @@ class ActionExecutor(object):
         """
         UAV Battery state callback
         """
-        self.battery_voltages[msg.header.seq %
-                              len(self.battery_voltages)] = msg.voltage
-        delta = self.INIT_VOLTAGE - self.MINIMUM_VOLTAGE
+        # self.battery_voltages[msg.header.seq %
+        #                       len(self.battery_voltages)] = msg.voltage
+        self.battery_voltages[msg.header.seq % len(
+            self.battery_voltages)] = msg.percentage * 100.
+        # delta = self.INIT_VOLTAGE - self.MINIMUM_VOLTAGE
+        # self.low_battery = (np.mean(self.battery_voltages) <=
+        #                     (self.MINIMUM_VOLTAGE +
+        #                      (0.1 * delta))) and (self._current_wp != 0)
         self.low_battery = (np.mean(self.battery_voltages) <=
-                            (self.MINIMUM_VOLTAGE +
-                             (0.1 * delta))) and (self._current_wp != 0)
+                            self.MINIMUM_VOLTAGE * 1.5) and (self._current_wp
+                                                             != 0)
 
     def set_battery(self, init_batt, min_batt, batt_rate):
         """
@@ -299,8 +304,7 @@ class ActionExecutor(object):
             [self.global_pose.latitude, self.global_pose.longitude])
         for idx, waypoint in enumerate(self.waypoints):
             temp = np.array([waypoint['lat'], waypoint['long']])
-            alt_diff = abs(self.global_pose.altitude -
-                           (self.home.geo.altitude + waypoint['rel_alt']))
+            alt_diff = abs(self._rel_alt[-1] - waypoint['rel_alt'])
             if idx == 0 and (np.linalg.norm(cur_pos - temp) < self._radius):
                 wp = idx
                 break
@@ -315,7 +319,7 @@ class ActionExecutor(object):
         Automated update landing (or flying) status
         """
         landed = (not self.state.armed)
-        if self._min_range > -1.:
+        if self.irr_name == '' and self._min_range > -1.:
             self.landed = (self.rangefinder <=
                            (self._min_range + 0.1)) or landed
         else:
@@ -359,18 +363,22 @@ class ActionExecutor(object):
         return response
 
     def calculate_batt_rate(self, init_batt, init_time,
-                            std_dev_likelihood=1.0):
+                            std_dev_likelihood=2.0):
         """
         Calculate battery rate consumption
         """
         x = float(init_batt - np.mean(self.battery_voltages))
         x = x / (rospy.Time.now() - init_time).secs
-        self.battery_rate_mean = (
-            (float(self.battery_rate_mean) / self.battery_rate_std**2) +
-            (x / std_dev_likelihood**2)) / ((1. / self.battery_rate_std**2) +
-                                            (1. / std_dev_likelihood**2))
-        self.battery_rate_std = 1. / ((1. / self.battery_rate_std**2) +
-                                      (1. / std_dev_likelihood))
+        print("bat mean: %.5f, bat std: %.5f" %
+              (self.battery_rate_mean, self.battery_rate_std))
+        std = 1.0 / (1.0 / (self.battery_rate_std**2) + 1.0 /
+                     (std_dev_likelihood**2))
+        self.battery_rate_mean = (float(self.battery_rate_mean) /
+                                  (self.battery_rate_std**2) + x /
+                                  (std_dev_likelihood**2)) * std
+        self.battery_rate_std = np.max([0.001, std])
+        print("bat mean: %.5f, bat std: %.5f" %
+              (self.battery_rate_mean, self.battery_rate_std))
 
     def takeoff(self, altitude, duration=rospy.Duration(60, 0)):
         """
@@ -616,11 +624,15 @@ class ActionExecutor(object):
                 self._lhm_pub.publish('%s,body,%s,base_link,0' %
                                       (self.namespace, self.irr_name))
                 self._rate.sleep()
+            hook_open = self.ACTION_SUCCESS
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
         return_back = self.goto(0, duration, True)
         duration = duration - (rospy.Time.now() - start)
-        lhm_prepared = self.lhm.landing_preparation(duration)
+        if hasattr(self, 'lhm'):
+            lhm_prepared = self.lhm.landing_preparation(duration)
+        elif hasattr(self, '_lhm_pub'):
+            lhm_prepared = self.ACTION_SUCCESS
         response = np.min([hook_open, go_side, lhm_prepared, return_back])
         if response == self.ACTION_SUCCESS:
             self.irr_name = ''
@@ -648,20 +660,20 @@ class ActionExecutor(object):
         original.yaw = yaw_ned_to_enu(wp['yaw'])
         original.yaw_rate = 0.2
         rospy.loginfo("%s is scanning the first blade..." % self.namespace)
-        first_blade = self.blade_inspect(original, [30.0, 0.0, 0.0], duration)
+        first_blade = self.blade_inspect(original, [10.0, 0.0, 0.0], duration)
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
         rospy.loginfo("%s is scan second blade..." % self.namespace)
         second_blade = self.blade_inspect(original, [
-            15.0 * np.cos(138. / 180.0 * np.pi), 0.000,
-            42.8 * np.sin(138. / 180.0 * np.pi)
+            5.0 * np.cos(138. / 180.0 * np.pi), 0.000,
+            14.27 * np.sin(138. / 180.0 * np.pi)
         ], duration)
         duration = duration - (rospy.Time.now() - start)
         start = rospy.Time.now()
         rospy.loginfo("%s is scan third blade..." % self.namespace)
         third_blade = self.blade_inspect(original, [
-            15.0 * np.cos(225. / 180.0 * np.pi), 0.000,
-            42.8 * np.sin(225. / 180.0 * np.pi)
+            5.0 * np.cos(225. / 180.0 * np.pi), 0.000,
+            14.27 * np.sin(225. / 180.0 * np.pi)
         ], duration)
         self.calculate_batt_rate(battery, init_time, self.battery_rate_std)
         rospy.loginfo("%s has done the inspection..." % self.namespace)
@@ -831,7 +843,7 @@ class ActionExecutor(object):
                 rospy.logerr("%s is %.3f meters away from impact!" %
                              (self.namespace,
                               (self._rangefinder[-1] - self._min_range)))
-                target_alt = self._rel_alt[-1]
+                target_alt = self.global_pose.altitude + 0.2
             elif desired_follower_alt is not None:
                 target_alt = desired_follower_alt
             else:
@@ -841,7 +853,7 @@ class ActionExecutor(object):
             target.yaw = yaw_ned_to_enu(heading + (yaw_offset / 180.) * np.pi)
             target.yaw_rate = 0.2
             # Publish aimed position
-            rospy.loginfo(target)
+            # rospy.loginfo(target)
             self._setpoint_pub.publish(target)
             # Check uav position with target
             latitude_offset, longitude_offset = xy_to_longlat(
@@ -854,8 +866,8 @@ class ActionExecutor(object):
                 self.global_pose.latitude,
                 self.global_pose.longitude,
             ])
-            # if abs(target_alt - self._rel_alt[-1]) < 0.5:
-            if np.linalg.norm(uav_pose - target_pose) < 5e-6:
+            if abs(target_alt - self.global_pose.altitude
+                   ) < 0.7 and np.linalg.norm(uav_pose - target_pose) < 6e-6:
                 rospy.loginfo("%s has found target, following %d seconds" %
                               (self.namespace, followed_duration.secs))
                 followed_duration += self._rate.sleep_dur
@@ -1005,9 +1017,15 @@ class ActionExecutor(object):
 
     def refuelling(self, duration=rospy.Duration(600, 0)):
         """
-        Fake refuel
+        Refuel
         """
-        rospy.sleep(int(duration.secs / np.random.uniform(low=1.0, high=2.0)))
+        start = rospy.Time.now()
+        while (rospy.Time.now() - start < duration) and not (
+                rospy.is_shutdown()) and (not self.external_intervened) and (
+                    np.mean(self.battery_voltages) < 99.0):
+            rospy.loginfo("Battery is charging, it is currently at %.2f" %
+                          (np.mean(self.battery_voltages)))
+            self._rate.sleep()
         return self.ACTION_SUCCESS
 
     def simu_drm_irr(self, irr, deploy=True, duration=rospy.Duration(600, 0)):
@@ -1042,7 +1060,7 @@ class ActionExecutor(object):
         # fly above the blade
         up_pose = [
             prev_blade[0] - self.local_pose.pose.position.x,
-            prev_blade[1] - self.local_pose.pose.position.y + 0.8,
+            prev_blade[1] - self.local_pose.pose.position.y + 0.7,
             prev_blade[2] - self.local_pose.pose.position.z + 3.
         ]
         rospy.loginfo("Blade is located, %s is flying up..." % self.namespace)
@@ -1063,7 +1081,7 @@ class ActionExecutor(object):
             target.longitude = self.global_pose.longitude
             target.altitude = self.rel_alt - self._rangefinder[-1]
             target.velocity.z = -0.1
-            target.yaw = yaw_ned_to_enu(heading + (np.pi * 92.5 / 180.))
+            target.yaw = yaw_ned_to_enu(heading + (np.pi * 93.5 / 180.))
             target.yaw_rate = 0.2
             reached_target = self.goto_coordinate(target,
                                                   radius=self._radius,
@@ -1071,7 +1089,7 @@ class ActionExecutor(object):
         else:
             rospy.loginfo("%s is preparing to pick %s" % (self.namespace, irr))
             reached_target = self.follow_target(
-                irr, False, [0., 0., self._min_range + 0.2], 0., None,
+                irr, False, [0., 0., self._min_range + 0.5], 0., None,
                 rospy.Duration(3, 0), duration)
         for _ in range(3):
             self._lhm_pub.publish('%s,body,%s,base_link,%d' %

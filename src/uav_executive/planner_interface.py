@@ -28,6 +28,7 @@ class PlannerInterface(object):
                  uav_waypoints,
                  connections,
                  wt_to_wp,
+                 with_asv=True,
                  update_frequency=10.):
         """
         A Class that interfaces with ROSPlan for dispatching uav actions and
@@ -82,7 +83,7 @@ class PlannerInterface(object):
 
         if not self.set_instances():
             rospy.logerr('UAV instances in PDDL can\'t be set!')
-        if not self.set_init(names, connections):
+        if not self.set_init(names, connections, with_asv):
             rospy.logerr('UAV initial state can\'t be set!')
         # Auto call functions
         rospy.Timer(self._rate.sleep_dur, self.fact_update)
@@ -180,6 +181,7 @@ class PlannerInterface(object):
             self.publish_feedback(action_dispatch.action_id, 'action failed')
         else:
             self.publish_feedback(action_dispatch.action_id, 'action failed')
+        return True
 
     def _battery_update(self, event):
         """
@@ -465,43 +467,54 @@ class PlannerInterface(object):
         for idx, msg in enumerate(self.dispatch_actions):
             if msg.action_id != self.action_sequence:
                 continue
-            duration = self.get_max_action_duration(msg.parameters,
-                                                    msg.duration)
-            print(
-                "params: %s, recommended: %.5f, max: %d.%d" %
-                (msg.parameters, msg.duration, duration.secs, duration.nsecs))
             # parse action message
             uav_names = [uav.namespace for uav in self.uavs]
             uav_name = [
                 parm.value for parm in msg.parameters
                 if parm.value in uav_names
             ]
+            action_executed = False
             if len(uav_name):
                 uav = [i for i in self.uavs if i.namespace == uav_name[0]][0]
+                duration = self.get_max_action_duration(
+                    msg.parameters, msg.duration)
+                # print("params: %s, recommended: %.5f, max: %d.%d" %
+                #       (msg.parameters, msg.duration, duration.secs,
+                #        duration.nsecs))
                 start = rospy.Time.now()
                 if msg.name == 'uav_takeoff':
-                    self._action(
+                    action_executed = self._action(
                         msg, uav.takeoff,
                         [rospy.get_param('~takeoff_altitude', 10.), duration])
                 elif msg.name == 'uav_land':
-                    self._action(msg, uav.return_to_launch, [True, duration])
+                    action_executed = self._action(msg, uav.return_to_launch,
+                                                   [True, duration])
                 elif msg.name == 'uav_navigate':
-                    self._action(msg, self.goto_waypoint,
-                                 [uav, msg.parameters, duration])
+                    action_executed = self._action(
+                        msg, self.goto_waypoint,
+                        [uav, msg.parameters, duration])
                 elif msg.name == 'uav_inspect_blade':
-                    self._action(msg, uav.inspect_wt, [duration])
+                    action_executed = self._action(msg, uav.inspect_wt,
+                                                   [duration])
                 elif msg.name == 'uav_retrieve_irr':
-                    self._action(msg, uav.retrieve_irr,
-                                 [msg.parameters[1].value, duration])
+                    action_executed = self._action(
+                        msg, uav.retrieve_irr,
+                        [msg.parameters[1].value, duration])
                 elif msg.name == 'uav_deploy_irr':
-                    self._action(msg, uav.deploy_irr, [duration])
-                elif msg.name == 'uav_refuelling':
-                    self._action(msg, uav.refuelling, [duration])
-                self.update_action_duration(rospy.Time.now() - start,
-                                            msg.parameters)
-                self.update_predicates(
-                    ['idle'], [[KeyValue('v', uav.namespace)]],
-                    [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
+                    action_executed = self._action(msg, uav.deploy_irr,
+                                                   [duration])
+                elif msg.name in ['uav_refuelling', 'uav_refuelling_home']:
+                    action_executed = self._action(msg, uav.refuelling,
+                                                   [duration])
+                if action_executed:
+                    if msg.name not in [
+                            'uav_refuelling', 'uav_refuelling_home'
+                    ]:
+                        self.update_action_duration(rospy.Time.now() - start,
+                                                    msg.parameters)
+                    self.update_predicates(
+                        ['idle'], [[KeyValue('v', uav.namespace)]],
+                        [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             msg_executed = True
             break
         if msg_executed:
@@ -579,7 +592,7 @@ class PlannerInterface(object):
         wps = [0, 0] if len(wps) == 0 else wps
         wps = wps[:2] if len(wps) > 2 else wps
         wps = [wps[0], wps[0]] if len(wps) == 1 else wps
-        print("wps: %s" % str(wps))
+        # print("wps: %s" % str(wps))
         try:
             conn = [
                 i[-2:] for i in self.connections if set(i[:2]) == set(wps)
@@ -593,7 +606,7 @@ class PlannerInterface(object):
     def update_action_duration(self,
                                duration,
                                parameters,
-                               std_dev_likelihood=1.0):
+                               std_dev_likelihood=15.0):
         """
         Update average and variance of the action duration
         """
@@ -608,13 +621,12 @@ class PlannerInterface(object):
         connections = [(idx, i) for idx, i in enumerate(self.connections)
                        if set(i[:2]) == set(wps)]
         for idx, conn in connections:
-            new_mean = ((float(conn[2]) / conn[3]**2) +
-                        (x / std_dev_likelihood**2)) / (
-                            (1. / conn[3]**2) + (1. / std_dev_likelihood**2))
             new_std = 1. / ((1. / conn[3]**2) + (1. / std_dev_likelihood**2))
+            new_mean = ((float(conn[2]) / conn[3]**2) +
+                        (x / std_dev_likelihood**2)) * new_std
             self.connections[idx] = [wps[0], wps[1], new_mean, new_std]
 
-    def set_init(self, uavs, connections):
+    def set_init(self, uavs, connections, with_asv=True):
         """
         Adding facts to the initial state
         """
@@ -638,8 +650,7 @@ class PlannerInterface(object):
             succeed = succeed and self.update_functions(['min_dur'], [[
                 KeyValue('wp1', 'uav_wp' + str(i[0])),
                 KeyValue('wp2', 'uav_wp' + str(i[1]))
-            ]], [norm.ppf(0.05, loc=float(i[2]), scale=float(i[3]))
-                 ], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
+            ]], [float(i[2])], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             # add max action duration on the wp connection
             succeed = succeed and self.update_functions(['max_dur'], [[
                 KeyValue('wp1', 'uav_wp' + str(i[0])),
@@ -688,4 +699,9 @@ class PlannerInterface(object):
                              loc=uav['fuel_rate'][0],
                              scale=uav['fuel_rate'][1])
                 ], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
+            # add charging post
+            if not with_asv:
+                succeed = succeed and self.update_predicates(
+                    ['charging_post'], [[KeyValue('wp', 'uav_wp0')]],
+                    [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
         return succeed

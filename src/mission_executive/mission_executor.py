@@ -35,9 +35,14 @@ class MissionExec(object):
             self.asv_exec = None
         # UAV planner
         if len(config['uavs']) and len(config['uav_waypoints']):
-            self.uav_exec = PIUAV(config['uavs'], config['uav_waypoints'],
+            with_asv = True
+            if self.asv_exec is None:
+                with_asv = False
+            self.uav_exec = PIUAV(config['uavs'],
+                                  config['uav_waypoints'],
                                   config['uav_waypoint_connection'],
-                                  config['uav_waypoint_to_wt'])
+                                  config['uav_waypoint_to_wt'],
+                                  with_asv=with_asv)
         else:
             self.uav_exec = None
         if len(config['irrs']) and len(config['irr_waypoints']):
@@ -159,7 +164,13 @@ class MissionExec(object):
         """
         pkg_path = roslib.packages.get_pkg_dir('mimree_executive')
         configs = yaml.load(open(pkg_path + '/config/%s' % filename, 'r'))
-        config = [i for i in configs if i['config'] == configname][0]
+        try:
+            config = [i for i in configs if i['config'] == configname][0]
+        except TypeError:
+            if configs['config'] == configname:
+                config = configs
+            else:
+                rospy.logerr("Configuration can't be found!")
         return config
 
     def add_mission(self, mission):

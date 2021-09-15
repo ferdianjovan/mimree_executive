@@ -8,6 +8,7 @@
     <arg name="dist_initial_landing" default="-5.0"/>
     <arg name="altitude_initial_landing" default="10.0"/>
     <arg name="takeoff_altitude" default="10.0"/>
+    <arg name="batt_multiplier" default="0.33"/>
     <arg name="scenario_type" default="simulation"/>
 
     <node name="mission_executive" pkg="mimree_executive" type="mission_executor.py" respawn="false" output="screen" args="-f $(arg config_file) -c $(arg mission_configuration) -m $(arg mission)">
@@ -18,4 +19,11 @@
         <param name="altitude_initial_landing" value="$(arg altitude_initial_landing)" type="double"/>
     </node>
 
+    <node name="hector_battery_modifier" pkg="mimree_executive" type="battery_remap.py" respawn="false" args="-n hector" output="screen">
+        <param name="batt_multiplier" value="$(arg batt_multiplier)" type="double"/>
+    </node>
+
+    <node name="halcyon_battery_modifier" pkg="mimree_executive" type="battery_remap.py" respawn="false" args="-n halcyon" output="screen">
+        <param name="batt_multiplier" value="$(arg batt_multiplier)" type="double"/>
+    </node>
 </launch>

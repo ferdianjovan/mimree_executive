@@ -2,6 +2,7 @@
 
 # 3rd Party Packages
 import re
+import numpy as np
 from threading import Lock
 
 # ROS Packages
@@ -164,6 +165,7 @@ class PlannerInterface(object):
             self.publish_feedback(action_dispatch.action_id, 'action failed')
         else:
             self.publish_feedback(action_dispatch.action_id, 'action failed')
+        return True
 
     def _fuel_update(self, event):
         """
@@ -265,8 +267,7 @@ class PlannerInterface(object):
             succeed = succeed and self.update_functions(['min_dur'], [[
                 KeyValue('wp1', 'asv_wp' + str(i[0])),
                 KeyValue('wp2', 'asv_wp' + str(i[1]))
-            ]], [norm.ppf(0.05, loc=float(i[2]), scale=float(i[3]))
-                 ], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
+            ]], [float(i[2])], [KnowledgeUpdateServiceRequest.ADD_KNOWLEDGE])
             # add max action duration on the wp connection
             succeed = succeed and self.update_functions(['max_dur'], [[
                 KeyValue('wp1', 'asv_wp' + str(i[0])),
@@ -480,24 +481,28 @@ class PlannerInterface(object):
         for idx, msg in enumerate(self.dispatch_actions):
             if msg.action_id != self.action_sequence:
                 continue
-            duration = self.get_max_action_duration(msg.parameters,
-                                                    msg.duration)
             # parse action message
             asv_names = [asv.namespace for asv in self.asvs]
             asv_name = [
                 parm.value for parm in msg.parameters
                 if parm.value in asv_names
             ]
+            action_executed = False
             if len(asv_name):
                 asv = [i for i in self.asvs if i.namespace == asv_name[0]][0]
+                duration = self.get_max_action_duration(
+                    msg.parameters, msg.duration)
                 start = rospy.Time.now()
                 if msg.name == 'asv_navigate':
-                    self._action(msg, self.goto_waypoint,
-                                 [asv, msg.parameters, duration])
+                    action_executed = self._action(
+                        msg, self.goto_waypoint,
+                        [asv, msg.parameters, duration])
                 elif msg.name == 'asv_inspect_wt':
-                    self._action(msg, asv.inspect_wt, [duration])
-                self.update_action_duration(rospy.Time.now() - start,
-                                            msg.parameters)
+                    action_executed = self._action(msg, asv.inspect_wt,
+                                                   [duration])
+                if action_executed:
+                    self.update_action_duration(rospy.Time.now() - start,
+                                                msg.parameters)
             msg_executed = True
             break
         if msg_executed:
@@ -525,7 +530,7 @@ class PlannerInterface(object):
     def update_action_duration(self,
                                duration,
                                parameters,
-                               std_dev_likelihood=1.0):
+                               std_dev_likelihood=15.0):
         """
         Update average and variance of the action duration
         """
@@ -538,8 +543,7 @@ class PlannerInterface(object):
         connections = [(idx, i) for idx, i in enumerate(self.connections)
                        if set(i[:2]) == set(wps)]
         for idx, conn in connections:
-            new_mean = ((float(conn[2]) / conn[3]**2) +
-                        (x / std_dev_likelihood**2)) / (
-                            (1. / conn[3]**2) + (1. / std_dev_likelihood**2))
             new_std = 1. / ((1. / conn[3]**2) + (1. / std_dev_likelihood**2))
+            new_mean = ((float(conn[2]) / conn[3]**2) +
+                        (x / std_dev_likelihood**2)) * new_std
             self.connections[idx] = [wps[0], wps[1], new_mean, new_std]

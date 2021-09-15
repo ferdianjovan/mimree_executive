@@ -223,9 +223,9 @@
 
     (:durative-action uav_refuelling
         :parameters (?uav - uav ?asv - asv ?wp - waypoint)
-        ;; :duration (= ?duration 3.0)
-        :duration (= ?duration (/ (- (max_fuel ?uav) (fuel ?uav)) (consumption_rate ?uav)))
+        :duration (= ?duration (/ (- (max_fuel ?uav) (fuel ?uav)) (* 10 (consumption_rate ?uav))))
         :condition (and
+            (at start (idle ?uav))
             (over all (ground ?uav))
             (over all (at ?uav ?wp))
             (over all (charging_post ?wp))
@@ -234,6 +234,25 @@
             (at start (< (fuel ?uav) (max_fuel ?uav)))
         )
         :effect (and
+            (at end (idle ?uav))
+            (at start (not (idle ?uav)))
+            (at end (assign (fuel ?uav) (max_fuel ?uav))) 
+        )
+    )
+
+    (:durative-action uav_refuelling_home
+        :parameters (?uav - uav ?wp - waypoint)
+        :duration (= ?duration (/ (- (max_fuel ?uav) (fuel ?uav)) (* 10 (consumption_rate ?uav))))
+        :condition (and
+            (at start (idle ?uav))
+            (over all (ground ?uav))
+            (over all (at ?uav ?wp))
+            (over all (charging_post ?wp))
+            (at start (< (fuel ?uav) (max_fuel ?uav)))
+        )
+        :effect (and
+            (at end (idle ?uav))
+            (at start (not (idle ?uav)))
             (at end (assign (fuel ?uav) (max_fuel ?uav))) 
         )
     )

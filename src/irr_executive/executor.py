@@ -126,19 +126,19 @@ class ActionExecutor(object):
                          1.5) and not (self._current_wp == 0)
 
     def calculate_fuel_rate(self, init_fuel, init_time,
-                            std_dev_likelihood=1.0):
+                            std_dev_likelihood=2.0):
         """
         Calculate fuel rate consumption
         """
         try:
             x = float(init_fuel - self.fuel)
             x = x / (rospy.Time.now() - init_time).secs
-            self.fuel_rate_mean = (
-                (float(self.fuel_rate_mean) / self.fuel_rate_std**2) +
-                (x / std_dev_likelihood**2)) / ((1. / self.fuel_rate_std**2) +
-                                                (1. / std_dev_likelihood**2))
-            self.fuel_rate_std = 1. / ((1. / self.fuel_rate_std**2) +
-                                       (1. / std_dev_likelihood))
+            std = 1.0 / (1.0 / (self.fuel_rate_std**2) + 1.0 /
+                         (std_dev_likelihood**2))
+            self.fuel_rate_mean = (float(self.fuel_rate_mean) /
+                                   (self.fuel_rate_std**2) + x /
+                                   (std_dev_likelihood**2)) * std
+            self.fuel_rate_std = np.max([0.001, std])
         except ZeroDivisionError:
             return
 
@@ -171,6 +171,20 @@ class ActionExecutor(object):
         buttons.header.frame_id = 'map'
         buttons.axes = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         buttons.buttons = [0, 0, 0, 1, 0, 0, 0, 0, 0]
+        for _ in range(3):
+            self._setpoint_pub.publish(buttons)
+            self._rate.sleep()
+        rospy.sleep(3)
+
+    def sit_pose(self):
+        """
+        sit pose
+        """
+        buttons = Joy()
+        buttons.header.stamp = rospy.Time.now()
+        buttons.header.frame_id = 'map'
+        buttons.axes = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        buttons.buttons = [1, 0, 0, 0, 0, 0, 0, 0, 0]
         for _ in range(3):
             self._setpoint_pub.publish(buttons)
             self._rate.sleep()
@@ -209,7 +223,7 @@ class ActionExecutor(object):
                 not rospy.is_shutdown()) and (not self.external_intervened):
             current_heading = self.heading
             if abs(current_heading - heading) > offset:
-                # self.embrace_pose()
+                self.sit_pose()
                 response = self.ACTION_SUCCESS
                 break
         if (rospy.Time.now() - start) > duration:
@@ -226,7 +240,7 @@ class ActionExecutor(object):
         if hasattr(self, 'olam'):
             response = self.olam.engagement_position(duration)
         elif "simulation" in rospy.get_param("~scenario_type", "simulation"):
-            self.embrace_pose()
+            self.sit_pose()
             response = self.ACTION_SUCCESS
         return response
 
@@ -247,7 +261,7 @@ class ActionExecutor(object):
         """
         Retrieving a crawler in real world
         """
-        rospy.sleep(1.0)
+        rospy.sleep(np.max([0., np.random.normal(loc=3.0, scale=0.5)]))
         return self.ACTION_SUCCESS
 
     def simulated_navigation(self,

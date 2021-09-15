@@ -8,7 +8,7 @@ import rospy
 from mavros_msgs.msg import GlobalPositionTarget, HomePosition, State
 from mavros_msgs.srv import CommandBool, CommandHome, SetMode
 from sensor_msgs.msg import BatteryState, NavSatFix
-from std_msgs.msg import Float64, Int32, Header
+from std_msgs.msg import Float64, Header, Int32
 from uav_executive.executor import xy_to_longlat, yaw_ned_to_enu
 
 
@@ -114,7 +114,7 @@ class ActionExecutor(object):
                          HomePosition,
                          self._home_cb,
                          queue_size=1)
-        rospy.Subscriber('/%s/mavros/battery' % self.namespace,
+        rospy.Subscriber('/%s/mavros/modified_battery' % self.namespace,
                          BatteryState,
                          self._battery_cb,
                          queue_size=1)
@@ -183,18 +183,18 @@ class ActionExecutor(object):
                          1.5) and not (self._current_wp == 0)
 
     def calculate_fuel_rate(self, init_fuel, init_time,
-                            std_dev_likelihood=1.0):
+                            std_dev_likelihood=2.0):
         """
         Calculate fuel rate consumption
         """
         x = float(init_fuel - self.fuel)
         x = x / (rospy.Time.now() - init_time).secs
-        self.fuel_rate_mean = (
-            (float(self.fuel_rate_mean) / self.fuel_rate_std**2) +
-            (x / std_dev_likelihood**2)) / ((1. / self.fuel_rate_std**2) +
-                                            (1. / std_dev_likelihood**2))
-        self.fuel_rate_std = 1. / ((1. / self.fuel_rate_std**2) +
-                                   (1. / std_dev_likelihood))
+        std = 1.0 / (1.0 / (self.fuel_rate_std**2) + 1.0 /
+                     (std_dev_likelihood**2))
+        self.fuel_rate_mean = (float(self.fuel_rate_mean) /
+                               (self.fuel_rate_std**2) + x /
+                               (std_dev_likelihood**2)) * std
+        self.fuel_rate_std = np.max([0.001, std])
 
     def update_uav_home_pos(self, event):
         """
