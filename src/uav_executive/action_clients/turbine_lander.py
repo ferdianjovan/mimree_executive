@@ -35,3 +35,5 @@ if __name__ == '__main__':
     print("GOAL SENT")
     client.wait_for_result(rospy.Duration(3 * minute))
     print("RESULT RECIEVED")
+
+
